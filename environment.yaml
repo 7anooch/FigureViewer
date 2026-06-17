@@ -1,0 +1,11 @@
+name: figviewer
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.10,<3.14
+  - streamlit>=1.49
+  - pyyaml
+  - pip
+  - pip:
+      - pymupdf

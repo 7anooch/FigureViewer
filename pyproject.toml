@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "figureviewer"
+version = "0.1.0"
+description = "Compare corresponding figures across multiple directories in a synchronized multi-panel view."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Hind" }]
+keywords = ["streamlit", "figures", "visualization", "comparison"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Web Environment",
+    "Framework :: Streamlit",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+dependencies = [
+    "streamlit>=1.49",
+    "pyyaml",
+    "pymupdf",
+]
+
+[project.optional-dependencies]
+pdf-embed = ["streamlit[pdf]"]
+dev = ["build", "ruff"]
+
+[project.scripts]
+figureviewer = "figureviewer.cli:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+figureviewer = ["keynav/*.html", "keynav/*.js"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
