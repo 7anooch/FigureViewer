@@ -1,4 +1,4 @@
-# Multi-panel Figure Compare
+# Figure Viewer
 
 A local Streamlit app for comparing corresponding figures across multiple folders.
 
