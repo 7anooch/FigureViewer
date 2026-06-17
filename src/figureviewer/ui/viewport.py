@@ -31,7 +31,6 @@ def render_figure_viewport() -> None:
     sync_mode = st.session_state.get("sync_mode", True)
     match_by = st.session_state.get("match_by", "position")
     show_metadata = st.session_state.get("show_metadata", False)
-    compact_ui = st.session_state.get("compact_ui", True)
     columns_per_row = st.session_state.get("columns_per_row", 2)
     display_mode = st.session_state.get("display_mode", "Fill panel")
     custom_width = st.session_state.get("custom_width", 700)
@@ -86,64 +85,32 @@ def render_figure_viewport() -> None:
         selected_name = None
         current_label = f"{st.session_state.current_index + 1} / {max_len}"
 
-    if compact_ui:
-        nav1, nav2, nav3 = st.columns([1, 2, 1])
-        with nav1:
-            st.button(
-                "⟵ Previous",
-                on_click=next_image,
-                args=(-1,),
-                key="nav_prev",
-                use_container_width=True,
-            )
-        with nav2:
-            st.slider(
-                "Index",
-                0,
-                st.session_state.max_index,
-                key="nav_index",
-                on_change=on_nav_index_change,
-            )
-        with nav3:
-            st.button(
-                "Next ⟶",
-                on_click=next_image,
-                args=(1,),
-                key="nav_next",
-                use_container_width=True,
-            )
-        st.markdown(f"**Current:** `{current_label}`")
-    else:
-        nav1, nav2, nav3, nav4, nav5 = st.columns([1, 1, 2, 1, 1])
-        with nav1:
-            st.button(
-                "⟵ Previous",
-                on_click=next_image,
-                args=(-1,),
-                key="nav_prev_full",
-                use_container_width=True,
-            )
-        with nav2:
-            st.button(
-                "Next ⟶",
-                on_click=next_image,
-                args=(1,),
-                key="nav_next_full",
-                use_container_width=True,
-            )
-        with nav3:
-            st.slider(
-                "Index",
-                0,
-                st.session_state.max_index,
-                key="nav_index",
-                on_change=on_nav_index_change,
-            )
-        with nav4:
-            st.button("First", on_click=go_first, key="nav_first", use_container_width=True)
-        with nav5:
-            st.button("Last", on_click=go_last, key="nav_last", use_container_width=True)
-        st.markdown(f"**Current:** `{current_label}`")
+    nav1, nav2, nav3 = st.columns([1, 2, 1])
+    with nav1:
+        st.button(
+            "⟵ Previous",
+            on_click=next_image,
+            args=(-1,),
+            key="nav_prev",
+            use_container_width=True,
+        )
+    with nav2:
+        st.slider(
+            "Index",
+            0,
+            st.session_state.max_index,
+            key="nav_index",
+            on_change=on_nav_index_change,
+        )
+    with nav3:
+        st.button(
+            "Next ⟶",
+            on_click=next_image,
+            args=(1,),
+            key="nav_next",
+            use_container_width=True,
+        )
+    st.markdown(f"**Current:** `{current_label}`")
 
     rows: List[List[Tuple[PanelConfig, List[Path]]]] = []
     for i in range(0, len(valid_panels), columns_per_row):
@@ -175,56 +142,23 @@ def render_figure_viewport() -> None:
                     chosen = figures[local_idx] if figures else None
 
                 if chosen is None:
-                    if compact_ui:
-                        st.markdown(f"**{panel.label}**")
-                    else:
-                        st.subheader(panel.label)
-                        st.caption(str(panel.directory))
+                    st.markdown(f"**{panel.label}**")
                     st.error("No matching figure in this panel.")
                     continue
 
                 rel = chosen.relative_to(panel.directory)
-                if compact_ui:
-                    st.markdown(f"**{panel.label}** · `{rel.name}`")
-                    with st.expander("Directory path", expanded=False):
-                        st.text(str(panel.directory))
-                    if show_metadata:
-                        render_metadata_editor(
-                            panel,
-                            key_prefix=f"meta_{panel.label}_{panel.directory}",
-                        )
-                    render_figure(
-                        chosen,
-                        display_width=display_width,
-                        pdf_dpi=pdf_dpi,
-                        pdf_mode=pdf_mode,
-                        pdf_embed_height=pdf_embed_height,
+                st.markdown(f"**{panel.label}** · `{rel.name}`")
+                with st.expander("Directory path", expanded=False):
+                    st.text(str(panel.directory))
+                if show_metadata:
+                    render_metadata_editor(
+                        panel,
+                        key_prefix=f"meta_{panel.label}_{panel.directory}",
                     )
-                else:
-                    st.subheader(panel.label)
-                    st.caption(str(panel.directory))
-                    if show_metadata:
-                        render_metadata_editor(
-                            panel,
-                            key_prefix=f"meta_{panel.label}_{panel.directory}",
-                        )
-                    st.code(str(rel), language=None)
-                    render_figure(
-                        chosen,
-                        display_width=display_width,
-                        pdf_dpi=pdf_dpi,
-                        pdf_mode=pdf_mode,
-                        pdf_embed_height=pdf_embed_height,
-                    )
-
-    if not compact_ui:
-        with st.expander("What this app does better than Finder", expanded=False):
-            st.markdown(
-                """
-                - Keep multiple directories visible in one synchronized view.
-                - Step through corresponding files together by position or by shared filename stem.
-                - Temporarily unsync panels when one directory needs independent inspection.
-                - Store descriptions and analysis metadata next to the figures, not in a separate opaque library.
-                - Preserve your existing directory tree instead of importing files into a new asset manager.
-                """
-            )
+                render_figure(
+                    chosen,
+                    display_width=display_width,
+                    pdf_dpi=pdf_dpi,
+                    pdf_mode=pdf_mode,
+                    pdf_embed_height=pdf_embed_height,
+                )

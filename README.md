@@ -125,7 +125,6 @@ PDFs:
 - **PDF display**
   - **Rasterize** (default) — render page 1 via PyMuPDF at configurable DPI; best for comparing PDFs with raster images
   - **Embedded viewer** — native `st.pdf` viewer (requires `streamlit[pdf]`)
-- **Compact UI** (default on) — hides page title and reduces per-panel chrome
 
 ## Navigation modes
 

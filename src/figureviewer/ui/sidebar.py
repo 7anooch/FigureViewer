@@ -46,7 +46,6 @@ def render_sidebar() -> None:
             "Duplicate stems use the first file in natural sort order."
         )
     st.checkbox("Show metadata editors", value=False, key="show_metadata")
-    st.checkbox("Compact UI", value=True, key="compact_ui")
     st.slider("Panels per row", min_value=1, max_value=4, value=2, key="columns_per_row")
 
     st.header("Display")
@@ -84,8 +83,6 @@ def render_sidebar() -> None:
     st.caption("Shortcuts (figure area only): ← previous · → next · Home first · End last")
     col_first, col_last = st.columns(2)
     with col_first:
-        if st.button("First", key="sidebar_first", use_container_width=True):
-            go_first()
+        st.button("First", key="sidebar_first", use_container_width=True, on_click=go_first)
     with col_last:
-        if st.button("Last", key="sidebar_last", use_container_width=True):
-            go_last()
+        st.button("Last", key="sidebar_last", use_container_width=True, on_click=go_last)

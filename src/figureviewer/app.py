@@ -20,12 +20,6 @@ def main() -> None:
     with st.sidebar:
         render_sidebar()
 
-    if not st.session_state.get("compact_ui", True):
-        st.title("Multi-panel Figure Compare")
-        st.caption(
-            "Compare corresponding figures across directories, with optional synchronized navigation."
-        )
-
     if st.session_state.get("show_directory_browser", True):
         render_column_browser()
     render_figure_viewport()
