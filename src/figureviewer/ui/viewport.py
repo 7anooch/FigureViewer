@@ -37,6 +37,7 @@ def render_figure_viewport() -> None:
     pdf_mode = st.session_state.get("pdf_mode", "Rasterize")
     pdf_dpi = st.session_state.get("pdf_dpi", 200)
     pdf_embed_height = st.session_state.get("pdf_embed_height", 700)
+    trim_whitespace = st.session_state.get("trim_whitespace", False)
     display_width = resolve_display_width(display_mode, custom_width)
 
     action = listen_keyboard()
@@ -161,4 +162,5 @@ def render_figure_viewport() -> None:
                     pdf_dpi=pdf_dpi,
                     pdf_mode=pdf_mode,
                     pdf_embed_height=pdf_embed_height,
+                    trim_whitespace_margins=trim_whitespace,
                 )

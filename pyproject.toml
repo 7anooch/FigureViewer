@@ -24,6 +24,7 @@ dependencies = [
     "streamlit>=1.49",
     "pyyaml",
     "pymupdf",
+    "pillow>=10",
 ]
 
 [project.optional-dependencies]

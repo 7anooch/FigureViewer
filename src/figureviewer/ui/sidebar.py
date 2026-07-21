@@ -5,6 +5,7 @@ import streamlit as st
 from figureviewer.browsing import init_browse_state
 from figureviewer.navigation import go_first, go_last
 from figureviewer.ui.column_browser import render_selected_panels_sidebar
+from figureviewer.ui.export_controls import render_export_controls
 
 
 def render_sidebar() -> None:
@@ -78,6 +79,15 @@ def render_sidebar() -> None:
             step=50,
             key="pdf_embed_height",
         )
+    st.checkbox(
+        "Trim whitespace margins",
+        value=False,
+        key="trim_whitespace",
+        help=(
+            "Crop near-white page margins (good for A4-centered PDF plots). "
+            "Applies to display and export; not used with Embedded PDF viewer."
+        ),
+    )
 
     st.header("Navigation")
     st.caption("Shortcuts (figure area only): ← previous · → next · Home first · End last")
@@ -86,3 +96,6 @@ def render_sidebar() -> None:
         st.button("First", key="sidebar_first", use_container_width=True, on_click=go_first)
     with col_last:
         st.button("Last", key="sidebar_last", use_container_width=True, on_click=go_last)
+
+    st.divider()
+    render_export_controls()

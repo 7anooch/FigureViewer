@@ -125,6 +125,20 @@ PDFs:
 - **PDF display**
   - **Rasterize** (default) — render page 1 via PyMuPDF at configurable DPI; best for comparing PDFs with raster images
   - **Embedded viewer** — native `st.pdf` viewer (requires `streamlit[pdf]`)
+- **Trim whitespace margins** — crop near-white page margins (useful for A4-centered PDF plots); applies to display and export
+
+## Export
+
+Use **Save figure** in the sidebar to write a single PNG of the current view:
+
+- Panels are arranged in the same row/column layout as on screen.
+- Each panel includes its title above the figure (panel labels by default).
+- Enable **Use custom titles** to supply one title per line (must match the number of panels).
+- **Output directory** defaults to the common parent folder of the selected panels; browse or type a path.
+- The first save prompts for a folder if none is set; that folder is reused for the rest of the session.
+- Check **Choose output folder on each save** to pick a different folder every time.
+- **Save all figures** exports every synchronized index (by position or filename stem) with the same layout and titles.
+- Quality: **Export PDF / SVG DPI** (default 300) controls rasterization; **Preserve native resolution** (default on) never downscales panels, and **Min panel width** sets a lower bound.
 
 ## Navigation modes
 
