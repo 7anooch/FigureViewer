@@ -138,6 +138,7 @@ Use **Save figure** in the sidebar to write a single PNG of the current view:
 - The first save prompts for a folder if none is set; that folder is reused for the rest of the session.
 - Check **Choose output folder on each save** to pick a different folder every time.
 - **Save all figures** exports every synchronized index (by position or filename stem) with the same layout and titles.
+- When syncing by **filename stem**, exports include a centered suptitle derived from the stem (underscores/hyphens → spaces, title case).
 - Quality: **Export PDF / SVG DPI** (default 300) controls rasterization; **Preserve native resolution** (default on) never downscales panels, and **Min panel width** sets a lower bound.
 
 ## Navigation modes

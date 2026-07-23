@@ -101,6 +101,15 @@ def _safe_filename(value: str) -> str:
     return cleaned[:120] or "figure"
 
 
+def format_stem_suptitle(stem: str) -> str:
+    """Turn a filename stem into a readable figure title (e.g. trial_001_raw → Trial 001 Raw)."""
+    text = stem.replace("_", " ").replace("-", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return stem
+    return text.title()
+
+
 def _draw_centered_text(
     draw: ImageDraw.ImageDraw,
     text: str,
@@ -132,6 +141,7 @@ def build_composite_image(
     gap: int | None = None,
     pad: int | None = None,
     bg: tuple[int, int, int] = (255, 255, 255),
+    suptitle: Optional[str] = None,
 ) -> Image.Image:
     if len(titles) != len(images):
         raise ValueError("Titles and images must have the same length.")
@@ -147,6 +157,11 @@ def build_composite_image(
     if pad is None:
         pad = max(12, int(round(12 * scale)))
     font = _title_font(size=max(18, int(round(18 * scale))))
+    suptitle_font = _title_font(size=max(24, int(round(28 * scale))))
+    suptitle_height = 0
+    if suptitle:
+        # Extra band above the panel grid for the shared stem title.
+        suptitle_height = max(48, int(round(56 * scale)))
 
     scaled_heights: List[int] = []
     for image in images:
@@ -164,11 +179,28 @@ def build_composite_image(
         row_heights.append(title_height + max_img_h)
 
     total_w = cols * cell_width + max(cols - 1, 0) * gap + 2 * pad
-    total_h = sum(row_heights) + max(rows - 1, 0) * gap + 2 * pad
+    total_h = (
+        sum(row_heights)
+        + max(rows - 1, 0) * gap
+        + 2 * pad
+        + (suptitle_height + gap if suptitle else 0)
+    )
     canvas = Image.new("RGB", (total_w, total_h), bg)
     draw = ImageDraw.Draw(canvas)
 
     y = pad
+    if suptitle:
+        suptitle_box = (pad, y, total_w - pad, y + suptitle_height)
+        draw.rectangle(suptitle_box, fill=(250, 250, 250))
+        _draw_centered_text(
+            draw,
+            suptitle,
+            suptitle_box,
+            font=suptitle_font,
+            fill=(15, 15, 15),
+        )
+        y += suptitle_height + gap
+
     for row in range(rows):
         x = pad
         row_h = row_heights[row]
@@ -227,6 +259,7 @@ def export_viewport_snapshot(
     trim_whitespace_margins: bool = False,
     preserve_native: bool = True,
     filename: Optional[str] = None,
+    suptitle: Optional[str] = None,
 ) -> ExportResult:
     if len(titles) != len(snapshot.panels):
         raise ValueError("Title count does not match panel count.")
@@ -250,6 +283,7 @@ def export_viewport_snapshot(
         images,
         columns_per_row=snapshot.columns_per_row,
         cell_width=resolved_width,
+        suptitle=suptitle,
     )
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -273,6 +307,7 @@ def export_all_viewport_snapshots(
     cell_width: int,
     trim_whitespace_margins: bool = False,
     preserve_native: bool = True,
+    stem_suptitles: bool = False,
 ) -> BatchExportResult:
     """Export every snapshot; filenames are numbered for stable ordering."""
     batch_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -296,6 +331,9 @@ def export_all_viewport_snapshots(
                 trim_whitespace_margins=trim_whitespace_margins,
                 preserve_native=preserve_native,
                 filename=filename,
+                suptitle=(
+                    format_stem_suptitle(snapshot.current_label) if stem_suptitles else None
+                ),
             )
         except Exception as exc:
             failed += 1

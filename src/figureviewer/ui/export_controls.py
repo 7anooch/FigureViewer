@@ -19,6 +19,7 @@ from figureviewer.display_state import (
 )
 from figureviewer.export_figures import (
     export_viewport_snapshot,
+    format_stem_suptitle,
     resolve_export_titles,
     suggest_export_output_dir,
 )
@@ -100,6 +101,19 @@ def _export_preserve_native() -> bool:
     return bool(st.session_state.get("export_preserve_native", True))
 
 
+def _sync_by_filename_stem() -> bool:
+    return bool(
+        st.session_state.get("sync_mode", True)
+        and st.session_state.get("match_by", "position") == "filename stem"
+    )
+
+
+def _suptitle_for_label(label: str) -> Optional[str]:
+    if not _sync_by_filename_stem():
+        return None
+    return format_stem_suptitle(label)
+
+
 def _on_save_figure() -> None:
     snapshot = get_viewport_snapshot(st.session_state)
     if snapshot is None:
@@ -123,6 +137,7 @@ def _on_save_figure() -> None:
             cell_width=_export_min_panel_width(),
             trim_whitespace_margins=st.session_state.get("trim_whitespace", False),
             preserve_native=_export_preserve_native(),
+            suptitle=_suptitle_for_label(snapshot.current_label),
         )
     except Exception as exc:
         st.session_state._export_flash = f"Export failed: {exc}"
@@ -162,6 +177,7 @@ def _on_request_batch_save() -> None:
         "cell_width": _export_min_panel_width(),
         "trim": st.session_state.get("trim_whitespace", False),
         "preserve_native": _export_preserve_native(),
+        "stem_suptitles": _sync_by_filename_stem(),
         "count": len(labels),
     }
 
@@ -204,6 +220,11 @@ def _run_pending_batch_export() -> None:
                 trim_whitespace_margins=pending["trim"],
                 preserve_native=pending.get("preserve_native", True),
                 filename=filename,
+                suptitle=(
+                    format_stem_suptitle(snapshot.current_label)
+                    if pending.get("stem_suptitles")
+                    else None
+                ),
             )
         except Exception as exc:
             failed += 1
