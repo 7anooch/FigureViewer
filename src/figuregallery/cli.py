@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 
 from figuregallery.models import GroupMode, SortMode
+from figuregallery.shortcuts import shortcuts_help_text
 from figuregallery.ui.app import run
 
 
@@ -48,6 +49,9 @@ def main(argv: list[str] | None = None) -> None:
             print(f"error: not a directory: {resolved}", file=sys.stderr)
             raise SystemExit(1)
         initial_root = resolved
+
+    print(shortcuts_help_text(for_console=True), file=sys.stderr)
+    print(file=sys.stderr)
 
     raise SystemExit(
         run(

@@ -302,11 +302,73 @@ All user stories US-1 through US-6; raster image formats; PyQt5 GUI; `figurecomm
 - Breadcrumb segment click → filter playlist to path prefix
 - Thumbnail strip below main image (small cache of downscaled thumbs)
 
+### v1.2 — Directory filter (optional)
+
+- **Partial tree alignment** — merge branches that share a suffix structure but differ by one or more skipped fan levels (see [§10.1](#101-directory-filter-folding-and-future-partial-alignment) below). Deferred; current symmetric folding is sufficient for most trees.
+
 ### v2.0 — PDF and parity
 
 - PDF display in viewport
 - Optional whitespace trim (port from FigureViewer)
 - Include PDFs in scan index
+
+---
+
+## 10.1 Directory filter: folding and future partial alignment
+
+### Implemented (v1)
+
+The **Directories…** dialog builds a **pruned** tree from the current category selection and **folds symmetric branches**: siblings whose subtrees have the same shape appear once as a **fan** of checkboxes (e.g. `A`, `B` at the top), with **shared** nodes below (e.g. unchecking `small_odor` excludes it under every parent variant). Folding is **recursive** at each depth — not only at the scan root.
+
+**Rationale:** Experiment trees often repeat the same layout under many top-level conditions; folding reduces redundant checkboxes and matches how users think about exclusions (“drop this model size everywhere”).
+
+### Known limitation: one fewer fan level
+
+Some branches share **most** of the layout but omit an intermediate fan level. Example from real data (`Elie_regression_glm`):
+
+| Branch | Path shape (directory segments) |
+|---|---|
+| `norm_run_speed`, `norm_turn_rate`, … | `{variant} / {delta_ratio \| ratio} / {include \| exclude}_control / {full \| small \| …} / {beta \| logit}` |
+| `raw` | `raw / {include \| exclude}_control / {full \| small \| …} / {beta \| logit}` |
+
+Everything from `include_control` downward is identical; only the `{delta_ratio, ratio}` fan is missing under `raw`.
+
+The current algorithm groups siblings by **immediate** child structure. Because `raw`’s next segment is `include_control` while `norm_run_speed`’s is `delta_ratio`, they cannot join the same top-level fan. `raw` therefore gets its **own** copy of the lower fans (`include_control`, `full`, `beta`, …). Behavior is **correct** (exclusions work) but **redundant** in the UI.
+
+### Future improvement (optional, v1.2+): partial / suffix alignment
+
+**Goal:** When branch B’s paths equal branch A’s paths with **one or more fan levels removed** (suffix match on directory structure), attach B to the **shared inner subtree** of A so inner checkboxes apply to both.
+
+**Example target UI:**
+
+```text
+FAN[3]: norm_run_speed, norm_run_speed_turn_rate, norm_turn_rate
+  FAN[2]: delta_ratio, ratio
+    FAN[2]: include_control, exclude_control    ← also applies to raw/*
+      FAN[5]: full, small, small_odor, …
+        FAN[2]: beta, logit
+
+☑ raw   (joins at include_control — no delta/ratio level)
+```
+
+**Suggested approach (conservative):**
+
+1. After building the main folded tree, find **orphan** top-level branches whose structure matches an **inner** node of the main tree (exact suffix match on segment names and fan shapes).
+2. Only merge when match is **exact** after stripping at most N fan layers (start with N = 1).
+3. Extend `exclusion_prefixes` on shared nodes to include paths under the orphan prefix (e.g. `raw/include_control` as well as `norm_run_speed/delta_ratio/include_control`).
+4. Label merged nodes in the UI (e.g. tooltip: “also applies to raw”).
+
+**Risks / why deferred:**
+
+- Almost-matching trees could be merged incorrectly if heuristics are too loose.
+- Exclusion logic and checkbox state become harder to reason about.
+- Benefit is high for gridded GLM-style trees but not universal.
+
+**Acceptance criteria (when implemented):**
+
+- `Elie_regression_glm`-style trees: `raw` does not duplicate fans below `include_control`.
+- Trees with genuinely different shapes remain split (no false merges).
+- Unchecking a shared inner node excludes figures under both `norm_*/…/include_control` and `raw/include_control`.
 
 ---
 

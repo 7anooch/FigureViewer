@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -30,9 +31,13 @@ from figuregallery.playlist import (
     build_playlist,
     category_position,
     filter_by_path_prefix,
+    list_figures_in_directory,
     preserve_position,
 )
+from figuregallery.directory_tree import filter_by_directory_exclusions
+from figuregallery.shortcuts import empty_state_message, shortcuts_help_text
 from figuregallery.ui.category_panel import CategoryPanel
+from figuregallery.ui.directory_filter_dialog import DirectoryFilterDialog
 from figuregallery.ui.loader import FigureLoader
 from figuregallery.ui.nav_controls import NavControls
 from figuregallery.ui.path_bar import PathBar
@@ -63,6 +68,9 @@ class MainWindow(QMainWindow):
         self._base_playlist: list[FigureRef] = []
         self._playlist: list[FigureRef] = []
         self._path_filter: Path | None = None
+        self._excluded_dirs: set[Path] = set()
+        self._this_folder_only = False
+        self._this_folder_anchor: Path | None = None
         self._current_index = 0
         self._cache = ImageCache()
         self._loader = FigureLoader()
@@ -73,6 +81,8 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_shortcuts()
         self._build_status_bar()
+        self._viewport.set_message(empty_state_message())
+        self._status.showMessage(shortcuts_help_text(for_console=False).replace("\n", "  ·  "), 12000)
 
         if initial_root is not None:
             self._scan_root(initial_root)
@@ -93,6 +103,21 @@ class MainWindow(QMainWindow):
         reveal_action.triggered.connect(self._reveal_current)
         toolbar.addAction(reveal_action)
         self._reveal_action = reveal_action
+
+        self._dir_filter_action = QAction("Directories…", self)
+        self._dir_filter_action.triggered.connect(self._open_directory_filter)
+        self._dir_filter_action.setEnabled(False)
+        toolbar.addAction(self._dir_filter_action)
+
+        self._this_folder_action = QAction("This folder", self)
+        self._this_folder_action.setCheckable(True)
+        self._this_folder_action.setEnabled(False)
+        self._this_folder_action.triggered.connect(self._toggle_this_folder_only)
+        self._this_folder_action.setToolTip(
+            "Show all figures in the current figure's directory (H to toggle)."
+        )
+        self._this_folder_action.setShortcut(QKeySequence("H"))
+        toolbar.addAction(self._this_folder_action)
 
         toolbar.addSeparator()
 
@@ -162,6 +187,9 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Right), self, self._go_next)
         QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._go_first)
         QShortcut(QKeySequence(Qt.Key.Key_End), self, self._go_last)
+        # Laptop-friendly: Cmd+← / Cmd+→ (Ctrl+← / Ctrl+→ on other platforms)
+        QShortcut(QKeySequence("Ctrl+Left"), self, self._go_first)
+        QShortcut(QKeySequence("Ctrl+Right"), self, self._go_last)
         QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._go_next)
 
     def _build_status_bar(self) -> None:
@@ -193,6 +221,8 @@ class MainWindow(QMainWindow):
         elapsed = time.perf_counter() - started
         self._scan_index = index
         self._path_filter = None
+        self._excluded_dirs = set()
+        self._clear_this_folder_only()
         self._categories = group_index(index, self._group_mode)
         self._category_panel.set_categories(self._categories)
         self._root_label.setText(f"Root: {index.root}")
@@ -231,6 +261,8 @@ class MainWindow(QMainWindow):
 
     def _on_selection_changed(self) -> None:
         self._path_filter = None
+        self._excluded_dirs = set()
+        self._clear_this_folder_only()
         self._rebuild_playlist(reset_index=True)
 
     def _on_pdf_only_attempted(self, key: str) -> None:
@@ -245,6 +277,9 @@ class MainWindow(QMainWindow):
             self._base_playlist = []
             self._playlist = []
             self._current_index = 0
+            self._dir_filter_action.setEnabled(False)
+            self._this_folder_action.setEnabled(False)
+            self._clear_this_folder_only()
             self._nav.set_total(0)
             self._path_bar.clear()
             self._caption.setText("")
@@ -257,13 +292,15 @@ class MainWindow(QMainWindow):
             self._sort_mode,
             group_mode=self._group_mode,
         )
-        self._apply_path_filter(
+        self._dir_filter_action.setEnabled(bool(self._base_playlist))
+        self._this_folder_action.setEnabled(bool(self._base_playlist))
+        self._apply_playlist_filters(
             reset_index=reset_index,
             old_playlist=old_playlist,
             old_index=old_index,
         )
 
-    def _apply_path_filter(
+    def _apply_playlist_filters(
         self,
         *,
         reset_index: bool,
@@ -273,16 +310,29 @@ class MainWindow(QMainWindow):
         old_playlist = old_playlist if old_playlist is not None else self._playlist
         old_index = old_index if old_playlist is self._playlist else old_index
 
-        self._playlist = filter_by_path_prefix(self._base_playlist, self._path_filter)
+        if self._this_folder_only and self._this_folder_anchor is not None and self._scan_index is not None:
+            self._playlist = list_figures_in_directory(
+                self._scan_index.refs,
+                self._this_folder_anchor,
+            )
+        else:
+            filtered = filter_by_directory_exclusions(self._base_playlist, self._excluded_dirs)
+            self._playlist = filter_by_path_prefix(filtered, self._path_filter)
 
         if not self._playlist:
             self._current_index = 0
             self._nav.set_total(0)
             self._caption.setText("")
-            if self._path_filter is not None:
+            if self._this_folder_only:
                 self._viewport.set_message(
-                    f"No figures under {self._path_filter} with the current category selection."
+                    f"No figures in {self._this_folder_anchor}."
                 )
+            elif self._path_filter is not None:
+                self._viewport.set_message(
+                    f"No figures under {self._path_filter} with the current filters."
+                )
+            elif self._excluded_dirs:
+                self._viewport.set_message("No figures remain after directory exclusions.")
             else:
                 self._viewport.set_message("No figures to display.")
             return
@@ -303,6 +353,10 @@ class MainWindow(QMainWindow):
         pos, total_in_cat = category_position(ref, self._playlist, group_mode=self._group_mode)
         key = ref.category_key(self._group_mode)
         caption = f"{key} · {pos} of {total_in_cat} in this category"
+        if self._this_folder_only and self._this_folder_anchor is not None:
+            caption += f" · this folder only ({self._this_folder_anchor})"
+        elif self._excluded_dirs:
+            caption += f" · {len(self._excluded_dirs)} dir{'s' if len(self._excluded_dirs) != 1 else ''} excluded"
         if self._path_filter is not None:
             caption += f" · filtered to {self._path_filter}"
         self._caption.setText(caption)
@@ -372,4 +426,38 @@ class MainWindow(QMainWindow):
             self._path_filter = None
         else:
             self._path_filter = relative
-        self._apply_path_filter(reset_index=True)
+        self._clear_this_folder_only()
+        self._apply_playlist_filters(reset_index=True)
+
+    def _clear_this_folder_only(self) -> None:
+        self._this_folder_only = False
+        self._this_folder_anchor = None
+        self._this_folder_action.setChecked(False)
+
+    def _toggle_this_folder_only(self, checked: bool) -> None:
+        if not self._playlist and checked:
+            self._this_folder_action.setChecked(False)
+            return
+        if checked:
+            if not self._playlist:
+                return
+            ref = self._playlist[self._current_index]
+            self._this_folder_only = True
+            self._this_folder_anchor = ref.parent_relative
+            self._apply_playlist_filters(reset_index=False)
+            return
+        self._clear_this_folder_only()
+        self._apply_playlist_filters(reset_index=False)
+
+    def _open_directory_filter(self) -> None:
+        if not self._base_playlist:
+            return
+        dialog = DirectoryFilterDialog(
+            self._base_playlist,
+            self._excluded_dirs,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        self._excluded_dirs = dialog.excluded_directories()
+        self._apply_playlist_filters(reset_index=False)

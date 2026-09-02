@@ -626,6 +626,25 @@ root/
 | Path filter from breadcrumb | `playlist.filter_by_prefix(Path)` |
 | Session restore | `settings.py` + `MainWindow.restore_state()` |
 | Thumbnail strip | `ThumbnailCache` with downscaled `QImage` |
+| **Partial tree alignment** | `directory_tree.py` — suffix-match orphan branches to inner shared subtrees (see design doc §10.1) |
+
+### 17.1 Partial tree alignment (future, optional)
+
+**Problem:** Symmetric folding (`_fold_variants` in `directory_tree.py`) groups siblings only when their **immediate** child structures match. Branches that omit one fan level (e.g. `raw/` vs `norm_run_speed/{delta_ratio,ratio}/`) duplicate inner fans even though `include_control` → `beta`/`logit` is identical.
+
+**Proposed implementation sketch:**
+
+1. After `build_filter_display_tree()`, run `_align_suffix_branches(display_nodes, all_paths, refs)`.
+2. For each top-level expanded node not in a fan, compute a **structure signature** of its full subtree.
+3. Walk the main folded tree; find inner nodes whose subtree signature equals the orphan’s (suffix alignment).
+4. If match is exact and depth difference equals one missing fan level, **attach** the orphan:
+   - Add orphan exclusion prefixes to shared nodes’ `exclusion_prefixes` (e.g. include `raw/include_control` wherever `*/include_control` appears).
+   - Optionally show orphan as a single checkbox that joins at the alignment depth (UI in `directory_filter_dialog.py`).
+5. Unit test: fixture mirroring `Elie_regression_glm` layout (`norm_*/ratio/...` + `raw/...`).
+
+**Conservative rule:** merge only on **exact** structural equality after stripping ≤1 fan layer; otherwise keep separate trees (current behavior).
+
+**Reference data:** `/Users/hind/Documents/UCSB/Neuroscience/KirstenData/new_data/Figs2026/Elie_regression_glm`
 
 ---
 

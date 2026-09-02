@@ -23,7 +23,7 @@ class FigureViewport(QWidget):
         layout.addWidget(self._message_label)
 
         self._current_image: QImage | None = None
-        self.set_message("Open a directory to scan for figures.")
+        self.set_message("")
 
     def set_message(self, text: str) -> None:
         self._current_image = None

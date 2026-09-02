@@ -108,6 +108,17 @@ def filter_by_path_prefix(playlist: list[FigureRef], prefix: Path | None) -> lis
     return [ref for ref in playlist if _path_has_prefix(ref.relative_path, prefix_parts)]
 
 
+def filter_by_parent_directory(playlist: list[FigureRef], parent: Path) -> list[FigureRef]:
+    """Keep figures whose parent directory exactly matches parent (relative to scan root)."""
+    return [ref for ref in playlist if ref.parent_relative == parent]
+
+
+def list_figures_in_directory(all_refs: list[FigureRef], parent: Path) -> list[FigureRef]:
+    """All displayable figures in one directory, sorted by filename."""
+    refs = [ref for ref in all_refs if ref.is_displayable and ref.parent_relative == parent]
+    return sorted(refs, key=lambda r: natural_key(r.filename))
+
+
 def _path_has_prefix(relative_path: Path, prefix_parts: tuple[str, ...]) -> bool:
     rel_parts = relative_path.parts
     if len(rel_parts) < len(prefix_parts):

@@ -3,11 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from figurecommon.scan import ScanOptions, walk_figures
+from figuregallery.directory_tree import (
+    FilterNodeKind,
+    build_directory_tree,
+    build_filter_display_tree,
+    collect_exclusions,
+    filter_by_directory_exclusions,
+    maximal_exclusions,
+)
 from figuregallery.grouping import group_refs, remap_selection
 from figuregallery.index import build_scan_index
-from figuregallery.models import FigureRef, GroupMode
+from figuregallery.models import Category, FigureRef, GroupMode, SortMode
 from figuregallery.playlist import build_playlist, filter_by_path_prefix
-from figuregallery.models import SortMode, Category
 
 
 def _ref(root: Path, rel: str) -> FigureRef:
@@ -109,7 +116,10 @@ def test_filter_by_path_prefix(tmp_path: Path) -> None:
         _ref(tmp_path, "run_a/other.png"),
     ]
     filtered = filter_by_path_prefix(refs, Path("run_a"))
-    assert [str(r.relative_path) for r in filtered] == ["run_a/plot.png", "run_a/other.png"]
+    assert [str(r.relative_path) for r in filtered] == [
+        "run_a/plot.png",
+        "run_a/other.png",
+    ]
     assert filter_by_path_prefix(refs, None) == refs
 
 
@@ -123,3 +133,73 @@ def test_build_scan_index(tmp_path: Path) -> None:
     index = build_scan_index(tmp_path, options=ScanOptions())
     assert len(index.refs) == 3
     assert sum(1 for r in index.refs if r.is_displayable) == 2
+
+
+def test_directory_exclusions(tmp_path: Path) -> None:
+    refs = [
+        _ref(tmp_path, "run_a/cond1/plot.png"),
+        _ref(tmp_path, "run_a/cond2/plot.png"),
+        _ref(tmp_path, "run_b/cond1/plot.png"),
+    ]
+    tree = build_directory_tree(refs)
+    assert "run_a" in tree.children
+    assert "cond1" in tree.children["run_a"].children
+
+    filtered = filter_by_directory_exclusions(refs, {Path("run_a/cond2")})
+    assert [str(r.relative_path) for r in filtered] == [
+        "run_a/cond1/plot.png",
+        "run_b/cond1/plot.png",
+    ]
+
+    checked = {
+        Path(): True,
+        Path("run_a"): True,
+        Path("run_a/cond1"): True,
+        Path("run_a/cond2"): False,
+        Path("run_b"): True,
+        Path("run_b/cond1"): True,
+    }
+    assert maximal_exclusions(checked) == {Path("run_a/cond2")}
+
+
+def test_list_figures_in_directory(tmp_path: Path) -> None:
+    refs = [
+        _ref(tmp_path, "run/a/plot.png"),
+        _ref(tmp_path, "run/a/other.png"),
+        _ref(tmp_path, "run/b/plot.png"),
+    ]
+    from figuregallery.playlist import list_figures_in_directory
+
+    in_a = list_figures_in_directory(refs, Path("run/a"))
+    assert [r.filename for r in in_a] == ["other.png", "plot.png"]
+
+
+def test_symmetric_directory_fold(tmp_path: Path) -> None:
+    refs = [
+        _ref(tmp_path, "A/a/z1/plot.png"),
+        _ref(tmp_path, "A/a/y1/plot.png"),
+        _ref(tmp_path, "A/b/z1/plot.png"),
+        _ref(tmp_path, "B/a/z1/plot.png"),
+        _ref(tmp_path, "B/a/y1/plot.png"),
+        _ref(tmp_path, "B/b/z1/plot.png"),
+    ]
+    display = build_filter_display_tree(refs)
+    assert len(display) == 1
+    fan = display[0]
+    assert len(fan.fan_variants) == 2
+    assert {v.name for v in fan.fan_variants} == {"A", "B"}
+    shared_names = {child.name for child in fan.children}
+    assert shared_names == {"a", "b"}
+
+    checked = {id(fan.fan_variants[0]): True, id(fan.fan_variants[1]): True}
+    for child in fan.children:
+        checked[id(child)] = child.name != "b"
+        for grandchild in child.children:
+            checked[id(grandchild)] = True
+
+    excluded = collect_exclusions(display, checked)
+    assert Path("A/b") in excluded
+    assert Path("B/b") in excluded
+    filtered = filter_by_directory_exclusions(refs, excluded)
+    assert all("/b/" not in str(r.relative_path) for r in filtered)
+    assert len(filtered) == 4
