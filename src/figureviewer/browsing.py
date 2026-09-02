@@ -2,19 +2,41 @@ from __future__ import annotations
 
 import hashlib
 import os
-import subprocess
-import sys
 from pathlib import Path
 from typing import List, Optional
 
 import streamlit as st
 
-from figureviewer.figures import PanelConfig, natural_key, panel_display_labels
+from figurecommon.paths import resolve_path
+from figurecommon.sort import natural_key
+from figureviewer.figures import PanelConfig, panel_display_labels
 from figureviewer.settings import load_default_browse_root
 
+__all__ = [
+    "apply_pending_browse_pick",
+    "clear_panel_directories",
+    "column_widget_key",
+    "current_tree_path",
+    "folder_dialog_available",
+    "folder_dialog_hint",
+    "format_breadcrumb",
+    "get_panel_configs",
+    "get_tree_stack",
+    "init_browse_state",
+    "list_child_dirs",
+    "navigate_tree",
+    "path_widget_key",
+    "pick_directory_dialog",
+    "reset_tree_to_root",
+    "resolve_path",
+    "tree_column_levels",
+]
 
-def resolve_path(path_str: str) -> Path:
-    return Path(os.path.expanduser(path_str.strip())).resolve()
+from figurecommon.paths import (  # noqa: E402  re-export for callers
+    folder_dialog_available,
+    folder_dialog_hint,
+    pick_directory_dialog,
+)
 
 
 def path_widget_key(prefix: str, path: Path) -> str:
@@ -32,87 +54,6 @@ def list_child_dirs(directory: Path) -> List[Path]:
         return []
     children = [p for p in directory.iterdir() if p.is_dir() and not p.name.startswith(".")]
     return sorted(children, key=lambda p: natural_key(p.name))
-
-
-def pick_directory_dialog(initial: Optional[str] = None) -> Optional[str]:
-    """Open a native folder picker in a subprocess (safe with Streamlit threads)."""
-    initial_path = initial if initial and Path(initial).exists() else str(Path.home())
-
-    if sys.platform == "darwin":
-        # AppleScript runs outside Python; avoids tkinter main-thread crash on macOS.
-        script = 'POSIX path of (choose folder with prompt "Select folder")'
-        try:
-            result = subprocess.run(
-                ["osascript", "-e", script],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None  # cancelled or failed
-        chosen = result.stdout.strip()
-        return str(Path(chosen).resolve()) if chosen else None
-
-    if sys.platform.startswith("linux"):
-        try:
-            result = subprocess.run(
-                ["zenity", "--file-selection", "--directory", "--title=Select folder"],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        chosen = result.stdout.strip()
-        return str(Path(chosen).resolve()) if chosen else None
-
-    if os.name == "nt":
-        ps = (
-            "Add-Type -AssemblyName System.Windows.Forms; "
-            "$dialog = New-Object System.Windows.Forms.FolderBrowserDialog; "
-            f"$dialog.SelectedPath = '{initial_path.replace(chr(39), chr(39) + chr(39))}'; "
-            "if ($dialog.ShowDialog() -eq 'OK') { Write-Output $dialog.SelectedPath }"
-        )
-        try:
-            result = subprocess.run(
-                ["powershell", "-NoProfile", "-Command", ps],
-                capture_output=True,
-                text=True,
-                timeout=300,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        chosen = result.stdout.strip()
-        return str(Path(chosen).resolve()) if chosen else None
-
-    return None
-
-
-def folder_dialog_available() -> bool:
-    if sys.platform == "darwin":
-        return True
-    if sys.platform.startswith("linux"):
-        from shutil import which
-        return which("zenity") is not None
-    if os.name == "nt":
-        return True
-    return False
-
-
-def folder_dialog_hint() -> str:
-    if sys.platform == "darwin":
-        return "Opens the macOS folder picker."
-    if sys.platform.startswith("linux"):
-        return "Requires `zenity` (install if Browse is disabled)."
-    if os.name == "nt":
-        return "Opens the Windows folder picker."
-    return "Not available on this platform; type a path instead."
 
 
 def get_panel_configs() -> List[PanelConfig]:
@@ -209,7 +150,6 @@ def init_browse_state() -> None:
         st.session_state.browse_root_input = st.session_state.browse_root
     if "tree_stack" not in st.session_state:
         st.session_state.tree_stack = [st.session_state.browse_root]
-    # Migrate legacy state from older builds.
     if "browse_cwd" in st.session_state:
         cwd = st.session_state.pop("browse_cwd")
         if cwd:

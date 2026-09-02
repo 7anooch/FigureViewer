@@ -28,11 +28,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+gallery = ["PyQt6>=6.4"]
 pdf-embed = ["streamlit[pdf]"]
-dev = ["build", "ruff"]
+dev = ["build", "ruff", "pytest"]
 
 [project.scripts]
 figureviewer = "figureviewer.cli:main"
+figuregallery = "figuregallery.cli:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

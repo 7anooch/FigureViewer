@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-FIGURE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".pdf"}
+from figurecommon.exts import FIGURE_EXTS
+from figurecommon.sort import natural_key
+
+__all__ = [
+    "FIGURE_EXTS",
+    "PanelConfig",
+    "common_stems",
+    "list_figures",
+    "natural_key",
+    "panel_display_labels",
+    "parse_panels",
+    "stem_lookup",
+]
 
 
 @dataclass
@@ -14,11 +25,6 @@ class PanelConfig:
     label: str
     directory: Path
     enabled: bool = True
-
-
-def natural_key(s: str):
-    """Sort file names in human order: fig2 before fig10."""
-    return [int(t) if t.isdigit() else t.lower() for t in re.split(r"(\d+)", s)]
 
 
 def list_figures(directory: Path, recursive: bool = False) -> List[Path]:

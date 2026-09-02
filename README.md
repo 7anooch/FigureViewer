@@ -30,14 +30,17 @@ Create the conda environment (first time only):
 ```bash
 conda env create -f environment.yaml
 conda activate figviewer
-pip install -e .
+pip install -e . --no-deps
 ```
 
-If you already have `figviewer`, activate it and install/update the package:
+This installs dependencies from conda-forge (including PyQt6). Pip is used only once for the editable install of this repo (`--no-deps` keeps conda as the source of truth for packages).
+
+If you already have `figviewer`, update and reinstall the local package:
 
 ```bash
 conda activate figviewer
-pip install -e .
+conda env update -f environment.yaml --prune
+pip install -e . --no-deps
 ```
 
 With embedded PDF viewer support:
@@ -177,12 +180,35 @@ The app can read and write descriptions plus optional fields:
 - tags
 - notes
 
+## Figure Gallery (sister app)
+
+Native PyQt6 app for browsing figures **across a directory tree**, grouped by filename or stem.
+
+Use when you have **many folders with a few figures each** (the inverse of FigureViewer's use case).
+
+```bash
+conda activate figviewer
+figuregallery
+figuregallery /path/to/experiment/tree
+```
+
+(PyQt6 is included in `environment.yaml` via conda-forge. For pip-only setups: `pip install -e ".[gallery]"`.)
+
+- Scan a root directory; categories appear in a sidebar with counts.
+- Select one or more categories and scroll through all matching figures.
+- Path shown relative to root; **Reveal in Finder** (`Cmd+E` / `Ctrl+E`).
+- Toggle **Stem** vs **Filename** grouping; choose sort order **Category → Path** or **Path → Category**.
+- PDFs are indexed and shown grayed in the sidebar (display support planned for v2).
+
+Docs: [`docs/figuregallery-design.md`](docs/figuregallery-design.md), [`docs/figuregallery-technical.md`](docs/figuregallery-technical.md).
+
 ## Development
 
 ```bash
 conda activate figviewer
 pip install -e ".[dev]"
-python -m compileall src/figureviewer
+python -m compileall src/figureviewer src/figurecommon src/figuregallery
+pytest
 ```
 
 ## Notes

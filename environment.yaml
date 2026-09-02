@@ -6,7 +6,7 @@ dependencies:
   - python>=3.10,<3.14
   - streamlit>=1.49
   - pyyaml
+  - pillow>=10
+  - pymupdf
+  - pyqt6>=6.4
   - pip
-  - pip:
-      - pymupdf
-      - pillow>=10
