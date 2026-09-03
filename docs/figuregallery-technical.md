@@ -65,14 +65,12 @@ FigureViewer/
 
 ### `pyproject.toml` changes
 
+Runtime packages come from conda (`environment.yaml`), not pip extras. `pyproject.toml` has empty `dependencies` so `pip install -e .` only registers packages and entry points:
+
 ```toml
 [project]
-name = "figureviewer"  # repo/package distribution name unchanged for now
-# existing figureviewer deps remain
-
-[project.optional-dependencies]
-gallery = ["PyQt6>=6.4"]  # optional; conda users get pyqt6 from environment.yaml
-dev = ["build", "ruff", "pytest"]
+name = "figureviewer"
+dependencies = []
 
 [project.scripts]
 figureviewer = "figureviewer.cli:main"
@@ -84,6 +82,7 @@ figuregallery = "figuregallery.cli:main"
 ```yaml
 dependencies:
   - pyqt6>=6.4   # conda-forge; also available as `pyqt` on some channels
+  - pytest
 ```
 
 ### Runtime dependency graph
@@ -544,7 +543,7 @@ root/
 - [ ] Multi-select categories; count matches playlist length.
 - [ ] Both sort modes; current figure preserved on sort change.
 - [ ] Stem/filename toggle; selection remap correct.
-- [ ] Reveal in Finder works on macOS.
+- [ ] Open enclosing folder works on macOS.
 - [ ] Rapid arrow-key scroll does not crash or show wrong image.
 - [ ] Large PNG (e.g. 4000×4000) loads off UI thread.
 - [ ] FigureViewer still launches and compares panels after `figurecommon` extraction.

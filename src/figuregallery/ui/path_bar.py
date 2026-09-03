@@ -133,7 +133,7 @@ class PathBar(QWidget):
     @staticmethod
     def _tooltip_for(prefix: Path, is_filename: bool) -> str:
         if is_filename:
-            return f"Reveal in Finder: {prefix}"
+            return f"Open enclosing folder: {prefix}"
         return f"Show only figures under {prefix} (click again to clear)"
 
     def _clear_layout(self) -> None:

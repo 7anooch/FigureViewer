@@ -40,7 +40,7 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 - Display one large figure at a time with **relative path** shown above it.
 - **Scroll** through the union of selected categories (keyboard, buttons, slider).
 - **Configurable sort order** for the playlist.
-- **Reveal in Finder** (or platform equivalent) for the current figure.
+- **Open enclosing folder** for the current figure (file manager / Finder).
 - **Lazy image loading** with a small in-memory cache.
 - Launch via **CLI** with optional root path argument.
 
@@ -48,7 +48,7 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 
 - Side-by-side multi-panel comparison (use FigureViewer).
 - Metadata YAML sidecars (`_figuregroup.yaml`).
-- Export / save composite images.
+- Export / save composite images (FigureViewer). Gallery PDF export of the current playlist is supported.
 - Live filesystem watching.
 - PDF **display** (deferred to v2); PDFs are **indexed** and shown grayed in the sidebar so you can see how many exist.
 
@@ -92,10 +92,10 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 
 ### US-4: Jump to filesystem
 
-> As a researcher, I press a hotkey to open Finder at the current figure's location.
+> As a researcher, I press a hotkey to open the enclosing folder at the current figure's location.
 
 **Acceptance:**
-- Toolbar button **Reveal in Finder** (platform-appropriate label on non-macOS).
+- Toolbar button **Open enclosing folder**.
 - Hotkey: `Cmd+E` (macOS) / `Ctrl+E` (Windows/Linux).
 - Uses `open -R <file>` on macOS; reasonable equivalents elsewhere.
 
@@ -144,7 +144,7 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 │                  │  ◀   7 / 20   ▶          [========●==========]          │
 │  2 selected      │  spike_raster · 3 of 12 in this category              │
 │  20 figures      │                                                       │
-│                  │  [Reveal in Finder]                                     │
+│                  │  [Open enclosing folder]                                │
 └──────────────────┴───────────────────────────────────────────────────────┘
 ```
 
@@ -152,7 +152,7 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 
 | Region | Widget | Notes |
 |---|---|---|
-| **Menu / toolbar** | Open, Rescan, Reveal, sort dropdown, group toggle | Standard `QMainWindow` toolbar |
+| **Menu / toolbar** | Open, Rescan, Open enclosing folder, sort dropdown, group toggle | Standard `QMainWindow` toolbar |
 | **Category panel** | `QListWidget` or `QTreeWidget` with checkboxes | Fixed width ~220px; collapsible in v2 |
 | **Filter box** | `QLineEdit` | Case-insensitive substring filter on category keys |
 | **Path bar** | Row of `QPushButton` segments + filename | Relative to root; last segment is filename |
@@ -179,7 +179,7 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 | `←` / `→` | Previous / next figure |
 | `Home` / `End` | First / last figure |
 | `Cmd+O` / `Ctrl+O` | Open root directory |
-| `Cmd+E` / `Ctrl+E` | Reveal in Finder |
+| `Cmd+E` / `Ctrl+E` | Open enclosing folder |
 | `Cmd+R` / `Ctrl+R` | Rescan |
 | `Space` | Next figure (optional; matches some gallery apps) |
 
@@ -382,7 +382,7 @@ FAN[3]: norm_run_speed, norm_run_speed_turn_rate, norm_turn_rate
 | Filename toggle | `X.png` vs `X.pdf` are often duplicates but not always; user judgment required. |
 | Relative paths | Absolute paths are long and repetitive when all files share a root. |
 | Two sort modes only | Covers the two observed workflows without over-engineering interleaved orderings. |
-| Reveal in Finder | Browsing is exploratory; user often needs neighboring scripts, data, or logs. |
+| Open enclosing folder | Browsing is exploratory; user often needs neighboring scripts, data, or logs. |
 | Exclude PDFs from v1 scan | Avoids selecting categories that cannot be displayed yet. |
 | No metadata sidecars | Context here is **path**, not experiment metadata; keeps v1 focused. |
 
@@ -397,7 +397,7 @@ Before implementation begins, confirm:
 - [x] PDFs indexed but grayed until v2 display support.
 - [ ] Selection preservation on stem/filename toggle is acceptable.
 - [ ] Sort-change preserves current figure (not reset to index 0).
-- [x] Hotkey `Cmd+E` / `Ctrl+E` for Reveal in Finder.
+- [x] Hotkey `Cmd+E` / `Ctrl+E` for Open enclosing folder.
 
 ---
 

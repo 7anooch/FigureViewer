@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 import time
 from pathlib import Path
 
@@ -13,6 +12,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QProgressDialog,
     QRadioButton,
     QStatusBar,
     QToolBar,
@@ -35,9 +35,11 @@ from figuregallery.playlist import (
     preserve_position,
 )
 from figuregallery.directory_tree import filter_by_directory_exclusions
-from figuregallery.shortcuts import empty_state_message, shortcuts_help_text
+from figuregallery.export import export_playlist_pdf
+from figuregallery.shortcuts import empty_state_html, shortcuts_help_text
 from figuregallery.ui.category_panel import CategoryPanel
 from figuregallery.ui.directory_filter_dialog import DirectoryFilterDialog
+from figuregallery.ui.export_dialog import ExportPdfDialog
 from figuregallery.ui.loader import FigureLoader
 from figuregallery.ui.nav_controls import NavControls
 from figuregallery.ui.path_bar import PathBar
@@ -81,7 +83,7 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._build_shortcuts()
         self._build_status_bar()
-        self._viewport.set_message(empty_state_message())
+        self._viewport.set_message(empty_state_html(), rich=True)
         self._status.showMessage(shortcuts_help_text(for_console=False).replace("\n", "  ·  "), 12000)
 
         if initial_root is not None:
@@ -99,7 +101,7 @@ class MainWindow(QMainWindow):
         rescan_action.triggered.connect(self._rescan)
         toolbar.addAction(rescan_action)
 
-        reveal_action = QAction("Reveal in Finder", self)
+        reveal_action = QAction("Open enclosing folder", self)
         reveal_action.triggered.connect(self._reveal_current)
         toolbar.addAction(reveal_action)
         self._reveal_action = reveal_action
@@ -118,6 +120,13 @@ class MainWindow(QMainWindow):
         )
         self._this_folder_action.setShortcut(QKeySequence("H"))
         toolbar.addAction(self._this_folder_action)
+
+        self._export_action = QAction("Export PDF…", self)
+        self._export_action.triggered.connect(self._export_pdf)
+        self._export_action.setEnabled(False)
+        self._export_action.setToolTip("Export the current playlist as a multi-page PDF.")
+        self._export_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Save))
+        toolbar.addAction(self._export_action)
 
         toolbar.addSeparator()
 
@@ -142,13 +151,9 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._stem_radio)
         toolbar.addWidget(self._filename_radio)
 
-        if sys.platform == "darwin":
-            reveal_action.setShortcut(QKeySequence("Ctrl+E"))
-            open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
-            rescan_action.setShortcut(QKeySequence("Ctrl+R"))
-        else:
-            reveal_action.setShortcut(QKeySequence("Ctrl+E"))
-            open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
+        reveal_action.setShortcut(QKeySequence("Ctrl+E"))
+        open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
+        rescan_action.setShortcut(QKeySequence("Ctrl+R"))
 
     def _build_ui(self) -> None:
         self._category_panel = CategoryPanel()
@@ -279,6 +284,7 @@ class MainWindow(QMainWindow):
             self._current_index = 0
             self._dir_filter_action.setEnabled(False)
             self._this_folder_action.setEnabled(False)
+            self._export_action.setEnabled(False)
             self._clear_this_folder_only()
             self._nav.set_total(0)
             self._path_bar.clear()
@@ -322,6 +328,7 @@ class MainWindow(QMainWindow):
         if not self._playlist:
             self._current_index = 0
             self._nav.set_total(0)
+            self._export_action.setEnabled(False)
             self._caption.setText("")
             if self._this_folder_only:
                 self._viewport.set_message(
@@ -343,6 +350,7 @@ class MainWindow(QMainWindow):
             self._current_index = preserve_position(old_playlist, old_index, self._playlist)
 
         self._nav.set_total(len(self._playlist), index=self._current_index)
+        self._export_action.setEnabled(bool(self._playlist))
         self._show_current_figure()
 
     def _show_current_figure(self) -> None:
@@ -461,3 +469,69 @@ class MainWindow(QMainWindow):
             return
         self._excluded_dirs = dialog.excluded_directories()
         self._apply_playlist_filters(reset_index=False)
+
+    def _export_pdf(self) -> None:
+        if not self._playlist:
+            return
+        scan_root = self._scan_index.root if self._scan_index is not None else None
+        dialog = ExportPdfDialog(
+            self._playlist,
+            scan_root=scan_root,
+            group_mode=self._group_mode,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        output_path = dialog.output_path()
+        if output_path.exists():
+            reply = QMessageBox.question(
+                self,
+                "Overwrite file?",
+                f"File already exists:\n{output_path}\n\nOverwrite?",
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+        progress = QProgressDialog("Exporting PDF…", "Cancel", 0, len(self._playlist), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        cancelled = False
+
+        def on_progress(index: int, total: int, ref) -> None:
+            nonlocal cancelled
+            progress.setValue(index)
+            progress.setLabelText(f"Exporting {index + 1} / {total}\n{ref.relative_path}")
+            if progress.wasCanceled():
+                cancelled = True
+                raise RuntimeError("Export cancelled")
+
+        try:
+            result = export_playlist_pdf(
+                self._playlist,
+                output_path,
+                progress_callback=on_progress,
+            )
+        except RuntimeError as exc:
+            if cancelled or "cancelled" in str(exc).lower():
+                self._status.showMessage("Export cancelled", 4000)
+                return
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+        finally:
+            progress.setValue(len(self._playlist))
+            progress.close()
+
+        self._status.showMessage(
+            f"Exported {result.pages} page{'s' if result.pages != 1 else ''} → {result.path}",
+            8000,
+        )
+        QMessageBox.information(
+            self,
+            "Export complete",
+            f"Wrote {result.pages} page{'s' if result.pages != 1 else ''}:\n{result.path}",
+        )

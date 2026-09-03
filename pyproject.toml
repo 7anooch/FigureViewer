@@ -20,17 +20,9 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Visualization",
 ]
-dependencies = [
-    "streamlit>=1.49",
-    "pyyaml",
-    "pymupdf",
-    "pillow>=10",
-]
-
-[project.optional-dependencies]
-gallery = ["PyQt6>=6.4"]
-pdf-embed = ["streamlit[pdf]"]
-dev = ["build", "ruff", "pytest"]
+# Runtime packages come from environment.yaml (conda-forge), not pip.
+# `pip install -e .` should only register this package and its entry points.
+dependencies = []
 
 [project.scripts]
 figureviewer = "figureviewer.cli:main"

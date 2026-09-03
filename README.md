@@ -30,39 +30,28 @@ Create the conda environment (first time only):
 ```bash
 conda env create -f environment.yaml
 conda activate figviewer
-pip install -e . --no-deps
+pip install -e .
 ```
 
-This installs dependencies from conda-forge (including PyQt6). Pip is used only once for the editable install of this repo (`--no-deps` keeps conda as the source of truth for packages).
+This installs dependencies from conda-forge (including PyQt6). `pyproject.toml` declares no pip runtime deps; `pip install -e .` only registers the local packages and CLI entry points.
 
 If you already have `figviewer`, update and reinstall the local package:
 
 ```bash
 conda activate figviewer
 conda env update -f environment.yaml --prune
-pip install -e . --no-deps
+pip install -e .
 ```
 
-With embedded PDF viewer support:
-
-```bash
-conda activate figviewer
-pip install -e ".[pdf-embed]"
-```
-
-Minimal install (images only, no PDF rasterization):
-
-```bash
-pip install -e . --no-deps
-pip install streamlit pyyaml
-```
+If a previous pip extra installed PyPI Qt (`PyQt6-Qt6`) and macOS fails with `Could not find the Qt platform plugin "cocoa"`: `pip uninstall -y PyQt6-Qt6` then `conda install -c conda-forge pyqt6`.
 
 ### Dependencies
 
 - `streamlit` — app framework
 - `pyyaml` — metadata sidecar files
-- `pymupdf` — rasterize PDF figures for sharp side-by-side comparison (recommended)
-- `streamlit[pdf]` — optional; only needed for **Embedded viewer** PDF mode (`pip install -e ".[pdf-embed]"`)
+- `pymupdf` — rasterize PDF figures for sharp side-by-side comparison
+- `pillow` — image loading
+- `pyqt6` — Figure Gallery GUI
 
 Arrow-key navigation is built in and only applies outside the sidebar.
 
@@ -192,11 +181,12 @@ figuregallery
 figuregallery /path/to/experiment/tree
 ```
 
-(PyQt6 is included in `environment.yaml` via conda-forge. For pip-only setups: `pip install -e ".[gallery]"`.)
+(PyQt6 comes from conda-forge via `environment.yaml`.)
 
 - Scan a root directory; categories appear in a sidebar with counts.
 - Select one or more categories and scroll through all matching figures.
-- Path shown relative to root; **Reveal in Finder** (`Cmd+E` / `Ctrl+E`).
+- Path shown relative to root; **Open enclosing folder** (`Cmd+E` / `Ctrl+E`).
+- **Export PDF…** (`Cmd+S` / `Ctrl+S`) writes the current playlist as one figure per page with a path title.
 - Toggle **Stem** vs **Filename** grouping; choose sort order **Category → Path** or **Path → Category**.
 - PDFs are indexed and shown grayed in the sidebar (display support planned for v2).
 
@@ -206,7 +196,7 @@ Docs: [`docs/figuregallery-design.md`](docs/figuregallery-design.md), [`docs/fig
 
 ```bash
 conda activate figviewer
-pip install -e ".[dev]"
+pip install -e .
 python -m compileall src/figureviewer src/figurecommon src/figuregallery
 pytest
 ```

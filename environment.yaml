@@ -9,4 +9,5 @@ dependencies:
   - pillow>=10
   - pymupdf
   - pyqt6>=6.4
+  - pytest
   - pip

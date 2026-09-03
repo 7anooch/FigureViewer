@@ -203,3 +203,29 @@ def test_symmetric_directory_fold(tmp_path: Path) -> None:
     filtered = filter_by_directory_exclusions(refs, excluded)
     assert all("/b/" not in str(r.relative_path) for r in filtered)
     assert len(filtered) == 4
+
+
+def test_export_filename_and_path_title(tmp_path: Path) -> None:
+    from figuregallery.export import export_playlist_pdf, path_title, suggest_export_filename
+
+    refs = [
+        _ref(tmp_path, "run_a/plot.png"),
+        _ref(tmp_path, "run_b/plot.png"),
+    ]
+    assert path_title(Path("run_a/cond1/plot.png")) == "run_a / cond1 / plot.png"
+    assert suggest_export_filename(refs, GroupMode.STEM) == "plot_gallery.pdf"
+    mixed = refs + [_ref(tmp_path, "run_a/other.png")]
+    assert suggest_export_filename(mixed, GroupMode.STEM) == "figure_gallery_3_figures.pdf"
+
+    # Tiny PNG for PDF write
+    from PIL import Image
+
+    for ref in refs:
+        ref.absolute_path.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), color=(200, 100, 50)).save(ref.absolute_path)
+
+    out = tmp_path / "out" / "gallery.pdf"
+    result = export_playlist_pdf(refs, out)
+    assert result.pages == 2
+    assert result.path.is_file()
+    assert result.path.stat().st_size > 0

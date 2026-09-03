@@ -13,9 +13,10 @@ class FigureViewport(QWidget):
         self._image_label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self._image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._image_label.setMinimumHeight(200)
-        self._message_label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
+        self._message_label = QLabel(alignment=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
         self._message_label.setWordWrap(True)
         self._message_label.setStyleSheet("color: #666; font-size: 14px;")
+        self._message_label.setTextFormat(Qt.TextFormat.PlainText)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -25,9 +26,12 @@ class FigureViewport(QWidget):
         self._current_image: QImage | None = None
         self.set_message("")
 
-    def set_message(self, text: str) -> None:
+    def set_message(self, text: str, *, rich: bool = False) -> None:
         self._current_image = None
         self._image_label.clear()
+        self._message_label.setTextFormat(
+            Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText
+        )
         self._message_label.setText(text)
         self._message_label.show()
 
