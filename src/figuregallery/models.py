@@ -51,17 +51,13 @@ class Category:
 
     @property
     def pdf_count(self) -> int:
-        return sum(1 for r in self.refs if not r.is_displayable)
+        return sum(1 for r in self.refs if r.absolute_path.suffix.lower() == ".pdf")
 
     @property
     def is_selectable(self) -> bool:
         return bool(self.displayable_refs)
 
     def label(self) -> str:
-        if self.pdf_count and self.is_selectable:
-            return f"{self.key} ({len(self.displayable_refs)} + {self.pdf_count} pdf)"
-        if self.pdf_count and not self.is_selectable:
-            return f"{self.key} ({self.pdf_count} pdf)"
         return f"{self.key} ({self.count})"
 
 

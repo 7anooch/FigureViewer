@@ -61,10 +61,12 @@ With `figviewer` activated:
 
 ```bash
 conda activate figviewer
-figureviewer
+figureviewer                 # Streamlit (default)
+figureviewer --desktop       # native PyQt6 app
+python -m figureviewer --desktop
 ```
 
-Equivalent alternatives:
+Equivalent Streamlit alternatives:
 
 ```bash
 python -m figureviewer
@@ -181,6 +183,39 @@ figuregallery
 figuregallery /path/to/experiment/tree
 ```
 
+### macOS app (Spotlight / Dock)
+
+**Collaborator / one-shot setup** (needs conda; creates `figviewer` if missing, editable-installs, builds the thin `.app`):
+
+```bash
+git clone <this-repo>
+cd FigureViewer
+./packaging/macos/bootstrap_install.sh
+open ~/Applications/Figure\ Gallery.app
+```
+
+Refresh deps from `environment.yaml` when they change: `./packaging/macos/bootstrap_install.sh --update-env`.
+
+**Already developing in `figviewer`?** Just rebuild the `.app`:
+
+```bash
+conda activate figviewer
+pip install -e .          # once / after packaging changes
+./packaging/macos/install_app.sh
+open ~/Applications/Figure\ Gallery.app
+```
+
+Optional custom logo (1024×1024 PNG):
+
+```bash
+./packaging/macos/bootstrap_install.sh --icon path/to/logo_1024.png
+# or: ./packaging/macos/install_app.sh --icon path/to/logo_1024.png
+```
+
+Logo idea prompts: [`packaging/macos/LOGO_PROMPTS.md`](packaging/macos/LOGO_PROMPTS.md).
+
+How macOS `.app` bundles work (thin launcher, bootstrap, frozen/portable): [`docs/macos-app-packaging.md`](docs/macos-app-packaging.md).
+
 (PyQt6 comes from conda-forge via `environment.yaml`.)
 
 - Scan a root directory; categories appear in a sidebar with counts.
@@ -188,7 +223,7 @@ figuregallery /path/to/experiment/tree
 - Path shown relative to root; **Open enclosing folder** (`Cmd+E` / `Ctrl+E`).
 - **Export PDF…** (`Cmd+S` / `Ctrl+S`) writes the current playlist as one figure per page with a path title.
 - Toggle **Stem** vs **Filename** grouping; choose sort order **Category → Path** or **Path → Category**.
-- PDFs are indexed and shown grayed in the sidebar (display support planned for v2).
+- PDFs are rasterized (page 1) at a configurable DPI, with optional whitespace trim.
 
 Docs: [`docs/figuregallery-design.md`](docs/figuregallery-design.md), [`docs/figuregallery-technical.md`](docs/figuregallery-technical.md).
 

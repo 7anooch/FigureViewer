@@ -650,7 +650,7 @@ root/
 ## 18. Approval checklist (technical)
 
 - [ ] `figurecommon` extraction scope is acceptable (minimal FigureViewer churn).
-- [x] v1 scan includes PDFs; PDF-only categories grayed, not selectable.
+- [x] Scan includes PDFs; PDFs are selectable and rasterized in the viewport.
 - [ ] `QThread` loader pattern acceptable (vs `QThreadPool` + `QRunnable`).
 - [ ] LRU cache size 5 is acceptable.
 - [ ] Implementation phase order is acceptable.

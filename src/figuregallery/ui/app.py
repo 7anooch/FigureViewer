@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from figuregallery.platform import configure_qt_plugins
 
 configure_qt_plugins()
 
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
 from figuregallery.models import GroupMode, SortMode
@@ -22,6 +24,9 @@ def run(
     app = QApplication(sys.argv)
     app.setApplicationName("Figure Gallery")
     app.setOrganizationName("figuregallery")
+    icon_path = os.environ.get("FIGUREGALLERY_APP_ICON", "").strip()
+    if icon_path and Path(icon_path).is_file():
+        app.setWindowIcon(QIcon(icon_path))
     window = MainWindow(
         initial_root=initial_root,
         group_mode=group_mode,

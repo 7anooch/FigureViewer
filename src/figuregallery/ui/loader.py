@@ -16,10 +16,14 @@ class FigureLoader(QThread):
         super().__init__()
         self._path: Path | None = None
         self._generation = 0
+        self._pdf_dpi = 200
+        self._trim = False
 
-    def load(self, path: Path) -> None:
+    def load(self, path: Path, *, pdf_dpi: int = 200, trim: bool = False) -> None:
         self._generation += 1
         self._path = path
+        self._pdf_dpi = pdf_dpi
+        self._trim = trim
         if self.isRunning():
             self.requestInterruption()
             self.wait(2000)
@@ -31,7 +35,7 @@ class FigureLoader(QThread):
         path = self._path
         generation = self._generation
         try:
-            data = load_figure_bytes(str(path), pdf_dpi=150, trim=False)
+            data = load_figure_bytes(str(path), pdf_dpi=self._pdf_dpi, trim=self._trim)
             image = QImage.fromData(data)
             if image.isNull():
                 raise RuntimeError("Could not decode image")

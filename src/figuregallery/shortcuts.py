@@ -30,10 +30,17 @@ def shortcut_entries() -> list[tuple[str, str]]:
         (f"{mod}+R", "Rescan"),
         (f"{mod}+E", "Open enclosing folder"),
         (f"{mod}+S", "Export PDF"),
-        ("← / →", "Previous / next figure"),
+        ("`", "Toggle focus: categories ↔ figure"),
+        ("← / →", "Previous / next figure (← on first → categories; → from list → figure)"),
         (f"{mod}+← / {mod}+→", "First / last figure"),
-        ("Space", "Next figure"),
+        ("Space / Enter", "Next figure (or toggle category when list focused)"),
+        ("↑ / ↓", "Move in category list (when focused)"),
+        ("/", "Filter categories (when list focused)"),
+        ("A", "Select / deselect all visible categories (when list focused)"),
         ("H", "This folder only (toggle)"),
+        (f"Pinch / {mod}+scroll", "Zoom figure"),
+        (f"{mod}+= / {mod}+-", "Zoom in / out"),
+        ("Double-click / Cmd+0" if sys.platform == "darwin" else f"Double-click / {mod}+0", "Reset zoom"),
     ]
 
 

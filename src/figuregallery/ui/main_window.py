@@ -3,9 +3,10 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QHBoxLayout,
@@ -14,6 +15,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressDialog,
     QRadioButton,
+    QSlider,
     QStatusBar,
     QToolBar,
     QVBoxLayout,
@@ -22,6 +24,7 @@ from PyQt6.QtWidgets import (
 
 from figurecommon.paths import pick_directory_dialog
 from figurecommon.scan import ScanOptions
+from figuregallery.browse_pacing import BrowsePacing
 from figuregallery.cache import ImageCache
 from figuregallery.grouping import group_index, remap_selection
 from figuregallery.index import build_scan_index
@@ -45,10 +48,10 @@ from figuregallery.ui.nav_controls import NavControls
 from figuregallery.ui.path_bar import PathBar
 from figuregallery.ui.viewport import FigureViewport
 
-PDF_ONLY_MESSAGE = (
-    "PDF display is not available yet (coming in v2).\n\n"
-    "This category contains only PDF files. Select a category with images to browse."
-)
+DEFAULT_PDF_DPI = 200
+MIN_PDF_DPI = 100
+MAX_PDF_DPI = 400
+PDF_DPI_STEP = 25
 
 
 class MainWindow(QMainWindow):
@@ -74,10 +77,20 @@ class MainWindow(QMainWindow):
         self._this_folder_only = False
         self._this_folder_anchor: Path | None = None
         self._current_index = 0
-        self._cache = ImageCache()
+        self._pdf_dpi = DEFAULT_PDF_DPI
+        self._trim_whitespace = False
+        self._pacing = BrowsePacing()
+        self._cache = ImageCache(max_items=self._pacing.budget.cache_size)
         self._loader = FigureLoader()
         self._loader.loaded.connect(self._on_image_loaded)
         self._loader.failed.connect(self._on_image_failed)
+        self._prefetch = FigureLoader()
+        self._prefetch.loaded.connect(self._on_prefetch_loaded)
+        self._prefetch.failed.connect(self._on_prefetch_failed)
+        self._idle_timer = QTimer(self)
+        self._idle_timer.setInterval(2000)
+        self._idle_timer.timeout.connect(self._on_idle_tick)
+        self._idle_timer.start()
 
         self._build_toolbar()
         self._build_ui()
@@ -151,6 +164,30 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self._stem_radio)
         toolbar.addWidget(self._filename_radio)
 
+        toolbar.addSeparator()
+        toolbar.addWidget(QLabel(" PDF DPI: "))
+        self._dpi_slider = QSlider(Qt.Orientation.Horizontal)
+        self._dpi_slider.setMinimum(MIN_PDF_DPI)
+        self._dpi_slider.setMaximum(MAX_PDF_DPI)
+        self._dpi_slider.setSingleStep(PDF_DPI_STEP)
+        self._dpi_slider.setPageStep(PDF_DPI_STEP)
+        self._dpi_slider.setTickInterval(PDF_DPI_STEP)
+        self._dpi_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._dpi_slider.setValue(DEFAULT_PDF_DPI)
+        self._dpi_slider.setFixedWidth(120)
+        self._dpi_slider.setToolTip("Rasterization DPI for PDF and SVG display and export.")
+        self._dpi_slider.valueChanged.connect(self._on_dpi_changed)
+        toolbar.addWidget(self._dpi_slider)
+        self._dpi_label = QLabel(str(DEFAULT_PDF_DPI))
+        toolbar.addWidget(self._dpi_label)
+
+        self._trim_checkbox = QCheckBox("Trim margins")
+        self._trim_checkbox.setToolTip(
+            "Crop near-white page margins. Applies to display and PDF export."
+        )
+        self._trim_checkbox.toggled.connect(self._on_trim_toggled)
+        toolbar.addWidget(self._trim_checkbox)
+
         reveal_action.setShortcut(QKeySequence("Ctrl+E"))
         open_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Open))
         rescan_action.setShortcut(QKeySequence("Ctrl+R"))
@@ -158,23 +195,35 @@ class MainWindow(QMainWindow):
     def _build_ui(self) -> None:
         self._category_panel = CategoryPanel()
         self._category_panel.selection_changed.connect(self._on_selection_changed)
-        self._category_panel.pdf_only_attempted.connect(self._on_pdf_only_attempted)
 
         self._path_bar = PathBar()
         self._path_bar.segment_clicked.connect(self._on_path_segment_clicked)
         self._viewport = FigureViewport()
+        self._category_panel.focus_figure_requested.connect(self._viewport.focus_display)
         self._nav = NavControls()
         self._nav.index_changed.connect(self._set_index)
 
         self._caption = QLabel()
-        self._caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._caption.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self._caption.setStyleSheet("color: #555;")
+        self._caption.setWordWrap(True)
+
+        self._zoom_hint = QLabel()
+        self._zoom_hint.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._zoom_hint.setStyleSheet("color: #888; font-size: 11px;")
+        self._zoom_hint.hide()
+        self._viewport.zoom_hint_changed.connect(self._on_zoom_hint_changed)
+
+        caption_row = QHBoxLayout()
+        caption_row.setContentsMargins(0, 0, 0, 0)
+        caption_row.addWidget(self._caption, stretch=1)
+        caption_row.addWidget(self._zoom_hint)
 
         right = QVBoxLayout()
         right.addWidget(self._path_bar)
         right.addWidget(self._viewport, stretch=1)
         right.addWidget(self._nav)
-        right.addWidget(self._caption)
+        right.addLayout(caption_row)
 
         right_widget = QWidget()
         right_widget.setLayout(right)
@@ -188,20 +237,51 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(container)
 
     def _build_shortcuts(self) -> None:
-        QShortcut(QKeySequence(Qt.Key.Key_Left), self, self._go_prev)
-        QShortcut(QKeySequence(Qt.Key.Key_Right), self, self._go_next)
-        QShortcut(QKeySequence(Qt.Key.Key_Home), self, self._go_first)
-        QShortcut(QKeySequence(Qt.Key.Key_End), self, self._go_last)
+        # Figure nav / zoom only when the viewport (or a child) has focus —
+        # so Space / arrows work for category checkboxes while the list is focused.
+        def _figure_shortcut(key: QKeySequence | str | Qt.Key, slot) -> None:
+            sc = QShortcut(QKeySequence(key), self._viewport)
+            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            sc.activated.connect(slot)
+
+        _figure_shortcut(Qt.Key.Key_Left, self._go_prev)
+        _figure_shortcut(Qt.Key.Key_Right, self._go_next)
+        _figure_shortcut(Qt.Key.Key_Home, self._go_first)
+        _figure_shortcut(Qt.Key.Key_End, self._go_last)
         # Laptop-friendly: Cmd+← / Cmd+→ (Ctrl+← / Ctrl+→ on other platforms)
-        QShortcut(QKeySequence("Ctrl+Left"), self, self._go_first)
-        QShortcut(QKeySequence("Ctrl+Right"), self, self._go_last)
-        QShortcut(QKeySequence(Qt.Key.Key_Space), self, self._go_next)
+        _figure_shortcut("Ctrl+Left", self._go_first)
+        _figure_shortcut("Ctrl+Right", self._go_last)
+        _figure_shortcut(Qt.Key.Key_Space, self._go_next)
+        _figure_shortcut("Ctrl+=", lambda: self._viewport.zoom_by(1.25))
+        _figure_shortcut("Ctrl++", lambda: self._viewport.zoom_by(1.25))
+        _figure_shortcut("Ctrl+-", lambda: self._viewport.zoom_by(1.0 / 1.25))
+        _figure_shortcut("Ctrl+0", self._viewport.reset_zoom)
+
+        toggle = QShortcut(QKeySequence(Qt.Key.Key_QuoteLeft), self)
+        toggle.setContext(Qt.ShortcutContext.WindowShortcut)
+        toggle.activated.connect(self._toggle_panel_focus)
+
+    def _toggle_panel_focus(self) -> None:
+        if self._category_panel.has_panel_focus():
+            self._viewport.focus_display()
+        else:
+            self._category_panel.focus_list()
 
     def _build_status_bar(self) -> None:
         self._status = QStatusBar()
         self.setStatusBar(self._status)
         self._root_label = QLabel("No root selected")
         self._status.addPermanentWidget(self._root_label)
+
+    def _on_zoom_hint_changed(self, text: str) -> None:
+        if text:
+            if self._zoom_hint.text() != text:
+                self._zoom_hint.setText(text)
+            if not self._zoom_hint.isVisible():
+                self._zoom_hint.show()
+        else:
+            self._zoom_hint.clear()
+            self._zoom_hint.hide()
 
     def _open_directory(self) -> None:
         initial = str(self._scan_index.root) if self._scan_index else None
@@ -231,13 +311,33 @@ class MainWindow(QMainWindow):
         self._categories = group_index(index, self._group_mode)
         self._category_panel.set_categories(self._categories)
         self._root_label.setText(f"Root: {index.root}")
-        pdf_count = sum(1 for r in index.refs if not r.is_displayable)
-        displayable = sum(1 for r in index.refs if r.is_displayable)
+        pdf_count = sum(1 for r in index.refs if r.absolute_path.suffix.lower() == ".pdf")
+        other = len(index.refs) - pdf_count
         self._status.showMessage(
-            f"Scanned {len(index.refs)} figures ({displayable} images, {pdf_count} pdf) in {elapsed:.1f}s",
+            f"Scanned {len(index.refs)} figures ({other} images, {pdf_count} pdf) in {elapsed:.1f}s",
             5000,
         )
         self._rebuild_playlist(reset_index=True)
+        self._viewport.focus_display()
+
+    def _on_dpi_changed(self, value: int) -> None:
+        stepped = MIN_PDF_DPI + ((value - MIN_PDF_DPI) // PDF_DPI_STEP) * PDF_DPI_STEP
+        if stepped != value:
+            self._dpi_slider.blockSignals(True)
+            self._dpi_slider.setValue(stepped)
+            self._dpi_slider.blockSignals(False)
+            value = stepped
+        self._pdf_dpi = value
+        self._dpi_label.setText(str(value))
+        self._cache.clear()
+        if self._playlist:
+            self._show_current_figure()
+
+    def _on_trim_toggled(self, checked: bool) -> None:
+        self._trim_whitespace = checked
+        self._cache.clear()
+        if self._playlist:
+            self._show_current_figure()
 
     def _on_group_mode_changed(self, checked: bool) -> None:
         if not checked or self._scan_index is None:
@@ -269,9 +369,6 @@ class MainWindow(QMainWindow):
         self._excluded_dirs = set()
         self._clear_this_folder_only()
         self._rebuild_playlist(reset_index=True)
-
-    def _on_pdf_only_attempted(self, key: str) -> None:
-        QMessageBox.information(self, "PDF not supported yet", PDF_ONLY_MESSAGE)
 
     def _rebuild_playlist(self, *, reset_index: bool) -> None:
         old_playlist = self._playlist
@@ -370,40 +467,106 @@ class MainWindow(QMainWindow):
         self._caption.setText(caption)
         self._nav.set_index(self._current_index)
 
-        cached = self._cache.get(ref.absolute_path)
+        cached = self._cache.get(
+            ref.absolute_path, pdf_dpi=self._pdf_dpi, trim=self._trim_whitespace
+        )
         if cached is not None:
             self._viewport.set_image(cached)
+            self._prefetch_neighbors()
             return
 
         self._viewport.set_loading()
-        self._loader.load(ref.absolute_path)
+        self._loader.load(ref.absolute_path, pdf_dpi=self._pdf_dpi, trim=self._trim_whitespace)
 
     def _on_image_loaded(self, path_str: str, image) -> None:
         if not self._playlist:
             return
         current = self._playlist[self._current_index]
+        self._cache.put(
+            Path(path_str),
+            image,
+            pdf_dpi=self._pdf_dpi,
+            trim=self._trim_whitespace,
+        )
         if str(current.absolute_path.resolve()) != path_str:
+            # Stale load; still cached for later, then resume prefetch.
+            self._prefetch_neighbors()
             return
-        self._cache.put(current.absolute_path, image)
         self._viewport.set_image(image)
+        self._prefetch_neighbors()
 
     def _on_image_failed(self, path_str: str, message: str) -> None:
         if not self._playlist:
             return
         current = self._playlist[self._current_index]
         if str(current.absolute_path.resolve()) != path_str:
+            self._prefetch_neighbors()
             return
         self._viewport.set_message(f"Could not load figure:\n{message}")
+
+    def _on_prefetch_loaded(self, path_str: str, image) -> None:
+        self._cache.put(
+            Path(path_str),
+            image,
+            pdf_dpi=self._pdf_dpi,
+            trim=self._trim_whitespace,
+        )
+        self._prefetch_neighbors()
+
+    def _on_prefetch_failed(self, path_str: str, message: str) -> None:
+        # Skip bad neighbors; keep warming the rest of the window.
+        del path_str, message
+        self._prefetch_neighbors()
+
+    def _apply_browse_budget(self) -> None:
+        budget = self._pacing.budget
+        self._cache.set_max_items(budget.cache_size)
+
+    def _on_idle_tick(self) -> None:
+        changed = self._pacing.decay_if_idle()
+        if changed is not None:
+            self._apply_browse_budget()
+
+    def _prefetch_neighbors(self) -> None:
+        """Warm nearby playlist entries so ←/→ rarely shows Loading…"""
+        if not self._playlist or self._prefetch.isRunning() or self._loader.isRunning():
+            return
+        radius = self._pacing.budget.prefetch_radius
+        # Prefer forward direction (typical browsing), then backward.
+        offsets = [o for pair in zip(range(1, radius + 1), range(-1, -radius - 1, -1)) for o in pair]
+        for offset in offsets:
+            index = self._current_index + offset
+            if index < 0 or index >= len(self._playlist):
+                continue
+            ref = self._playlist[index]
+            if self._cache.get(
+                ref.absolute_path, pdf_dpi=self._pdf_dpi, trim=self._trim_whitespace
+            ) is not None:
+                continue
+            self._prefetch.load(
+                ref.absolute_path,
+                pdf_dpi=self._pdf_dpi,
+                trim=self._trim_whitespace,
+            )
+            return
 
     def _set_index(self, index: int) -> None:
         if not self._playlist:
             return
+        self._pacing.note_navigate()
+        self._apply_browse_budget()
         self._current_index = max(0, min(index, len(self._playlist) - 1))
         self._show_current_figure()
 
     def _go_prev(self) -> None:
-        if self._playlist and self._current_index > 0:
+        if not self._playlist:
+            self._category_panel.focus_list()
+            return
+        if self._current_index > 0:
             self._set_index(self._current_index - 1)
+        else:
+            # Already on the first figure — hand focus to categories instead of a no-op.
+            self._category_panel.focus_list()
 
     def _go_next(self) -> None:
         if self._playlist and self._current_index < len(self._playlist) - 1:
@@ -511,6 +674,8 @@ class MainWindow(QMainWindow):
             result = export_playlist_pdf(
                 self._playlist,
                 output_path,
+                pdf_dpi=self._pdf_dpi,
+                trim=self._trim_whitespace,
                 progress_callback=on_progress,
             )
         except RuntimeError as exc:

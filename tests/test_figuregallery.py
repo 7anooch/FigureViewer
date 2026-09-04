@@ -57,7 +57,7 @@ def test_group_by_stem_and_filename(tmp_path: Path) -> None:
 
     name_groups = group_refs(refs, GroupMode.FILENAME)
     assert set(name_groups) == {"plot.png", "plot.pdf"}
-    assert not name_groups["plot.pdf"].is_selectable
+    assert name_groups["plot.pdf"].is_selectable
     assert name_groups["plot.png"].is_selectable
 
 
@@ -132,7 +132,7 @@ def test_build_scan_index(tmp_path: Path) -> None:
 
     index = build_scan_index(tmp_path, options=ScanOptions())
     assert len(index.refs) == 3
-    assert sum(1 for r in index.refs if r.is_displayable) == 2
+    assert sum(1 for r in index.refs if r.is_displayable) == 3
 
 
 def test_directory_exclusions(tmp_path: Path) -> None:
@@ -172,6 +172,24 @@ def test_list_figures_in_directory(tmp_path: Path) -> None:
 
     in_a = list_figures_in_directory(refs, Path("run/a"))
     assert [r.filename for r in in_a] == ["other.png", "plot.png"]
+
+
+def test_playlist_includes_pdf(tmp_path: Path) -> None:
+    refs = [
+        _ref(tmp_path, "run/plot.png"),
+        _ref(tmp_path, "run/plot.pdf"),
+    ]
+    categories = {"plot": Category(key="plot", refs=refs)}
+    playlist = build_playlist(
+        categories,
+        {"plot"},
+        SortMode.CATEGORY_THEN_PATH,
+        group_mode=GroupMode.STEM,
+    )
+    assert [r.filename for r in playlist] == ["plot.pdf", "plot.png"]
+    pdf_only = Category(key="plot.pdf", refs=[refs[1]])
+    assert pdf_only.is_selectable
+    assert pdf_only.pdf_count == 1
 
 
 def test_symmetric_directory_fold(tmp_path: Path) -> None:
@@ -229,3 +247,49 @@ def test_export_filename_and_path_title(tmp_path: Path) -> None:
     assert result.pages == 2
     assert result.path.is_file()
     assert result.path.stat().st_size > 0
+
+
+def test_browse_pacing_expands_on_fast_nav_and_decays_when_idle(monkeypatch) -> None:
+    from figuregallery.browse_pacing import BrowsePacing
+
+    pacing = BrowsePacing()
+    clock = {"t": 100.0}
+    monkeypatch.setattr("figuregallery.browse_pacing.time.monotonic", lambda: clock["t"])
+
+    assert pacing.budget.cache_size == BrowsePacing.BASE_CACHE
+    assert pacing.budget.prefetch_radius == BrowsePacing.BASE_PREFETCH
+
+    for _ in range(BrowsePacing.FAST_STREAK):
+        clock["t"] += 0.1
+        pacing.note_navigate()
+
+    assert pacing.budget.cache_size > BrowsePacing.BASE_CACHE
+    assert pacing.budget.prefetch_radius > BrowsePacing.BASE_PREFETCH
+    expanded = pacing.budget
+
+    assert pacing.decay_if_idle() is None  # not idle yet
+    clock["t"] += BrowsePacing.IDLE_S + 0.1
+    decayed = pacing.decay_if_idle()
+    assert decayed is not None
+    assert decayed.cache_size < expanded.cache_size
+    assert decayed.cache_size >= BrowsePacing.MIN_CACHE
+
+
+def test_image_cache_set_max_items_trims_lru() -> None:
+    from PyQt6.QtGui import QImage
+
+    from figuregallery.cache import ImageCache
+
+    cache = ImageCache(max_items=3)
+    paths = [Path(f"/tmp/fig_{i}.png") for i in range(3)]
+    for p in paths:
+        cache.put(p, QImage(1, 1, QImage.Format.Format_RGB32))
+    assert len(cache) == 3
+
+    cache.set_max_items(2)
+    assert cache.max_items == 2
+    assert len(cache) == 2
+    # Oldest (paths[0]) should be evicted
+    assert cache.get(paths[0]) is None
+    assert cache.get(paths[1]) is not None
+    assert cache.get(paths[2]) is not None

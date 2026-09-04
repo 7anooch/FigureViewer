@@ -62,7 +62,8 @@ def export_playlist_pdf(
     refs: list[FigureRef],
     output_path: Path,
     *,
-    pdf_dpi: int = 150,
+    pdf_dpi: int = 200,
+    trim: bool = False,
     progress_callback=None,
 ) -> ExportResult:
     """Write one PDF page per figure in playlist order."""
@@ -81,7 +82,7 @@ def export_playlist_pdf(
         for index, ref in enumerate(refs):
             if progress_callback is not None:
                 progress_callback(index, len(refs), ref)
-            _add_figure_page(doc, ref, pdf_dpi=pdf_dpi)
+            _add_figure_page(doc, ref, pdf_dpi=pdf_dpi, trim=trim)
         doc.save(str(output_path))
     finally:
         doc.close()
@@ -89,7 +90,7 @@ def export_playlist_pdf(
     return ExportResult(path=output_path, pages=len(refs))
 
 
-def _add_figure_page(doc, ref: FigureRef, *, pdf_dpi: int) -> None:
+def _add_figure_page(doc, ref: FigureRef, *, pdf_dpi: int, trim: bool = False) -> None:
     page = doc.new_page(width=_PAGE_WIDTH, height=_PAGE_HEIGHT)
     title = path_title(ref.relative_path)
     page.insert_text(
@@ -100,7 +101,7 @@ def _add_figure_page(doc, ref: FigureRef, *, pdf_dpi: int) -> None:
         color=(0.15, 0.15, 0.15),
     )
 
-    png_bytes = load_figure_bytes(str(ref.absolute_path), pdf_dpi=pdf_dpi, trim=False)
+    png_bytes = load_figure_bytes(str(ref.absolute_path), pdf_dpi=pdf_dpi, trim=trim)
     with Image.open(BytesIO(png_bytes)) as image:
         iw, ih = image.size
 

@@ -6,7 +6,7 @@ IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 VECTOR_EXTS = {".svg"}
 PDF_EXTS = {".pdf"}
 FIGURE_EXTS = IMAGE_EXTS | VECTOR_EXTS | PDF_EXTS
-DISPLAYABLE_EXTS = IMAGE_EXTS | VECTOR_EXTS
+DISPLAYABLE_EXTS = IMAGE_EXTS | VECTOR_EXTS | PDF_EXTS
 
 
 def is_displayable_path(path: Path) -> bool:

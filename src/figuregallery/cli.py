@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -50,8 +51,10 @@ def main(argv: list[str] | None = None) -> None:
             raise SystemExit(1)
         initial_root = resolved
 
-    print(shortcuts_help_text(for_console=True), file=sys.stderr)
-    print(file=sys.stderr)
+    quiet = os.environ.get("FIGUREGALLERY_QUIET") == "1" or not sys.stderr.isatty()
+    if not quiet:
+        print(shortcuts_help_text(for_console=True), file=sys.stderr)
+        print(file=sys.stderr)
 
     raise SystemExit(
         run(

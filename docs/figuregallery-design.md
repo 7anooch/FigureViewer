@@ -50,7 +50,7 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 - Metadata YAML sidecars (`_figuregroup.yaml`).
 - Export / save composite images (FigureViewer). Gallery PDF export of the current playlist is supported.
 - Live filesystem watching.
-- PDF **display** (deferred to v2); PDFs are **indexed** and shown grayed in the sidebar so you can see how many exist.
+- **PDF display**: rasterize page 1 via PyMuPDF (same as FigureViewer Rasterize mode), with optional whitespace trim.
 
 ### Non-goals (ever, unless scope changes)
 
@@ -181,9 +181,15 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 | `Cmd+O` / `Ctrl+O` | Open root directory |
 | `Cmd+E` / `Ctrl+E` | Open enclosing folder |
 | `Cmd+R` / `Ctrl+R` | Rescan |
-| `Space` | Next figure (optional; matches some gallery apps) |
+| `` ` `` | Toggle focus: categories ↔ figure |
+| `←` on first figure | Focus category list |
+| `→` from category list | Focus figure |
+| `Space` / `Enter` | Next figure (toggle category check when list focused) |
+| `↑` / `↓` | Move in category list (when focused) |
+| `/` | Jump to category filter (when list focused) |
+| `A` | Select / deselect all visible categories (when list focused) |
 
-Shortcuts apply when main viewport has focus, not when typing in the filter box.
+Shortcuts for figure navigation apply when the viewport has focus. Use `` ` `` or the edge-arrow handoff above to move between the category list and the figure.
 
 ### Category filter
 
@@ -228,16 +234,11 @@ Depth-first directory order: sort full relative **parent** paths naturally, not 
 |---|---|
 | `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif` | Load via Pillow → `QImage` |
 | `.svg` | Rasterize via PyMuPDF (same approach as FigureViewer) |
-
-### v2 (display)
-
-| Extension | Handling |
-|---|---|
-| `.pdf` | Rasterize page 1 via PyMuPDF |
+| `.pdf` | Rasterize page 1 via PyMuPDF; optional whitespace trim |
 
 ### Indexing
 
-PDFs are **included in the scan index**. Categories that contain only PDFs appear **grayed out** in the sidebar; attempting to select them shows a message that PDF display is coming in v2. Mixed categories (e.g. `X.png` and `X.pdf` under stem grouping) are selectable; the playlist includes displayable files only.
+PDFs are included in the scan index and the playlist. PDF-only categories are selectable.
 
 ---
 
@@ -308,9 +309,9 @@ All user stories US-1 through US-6; raster image formats; PyQt5 GUI; `figurecomm
 
 ### v2.0 — PDF and parity
 
-- PDF display in viewport
-- Optional whitespace trim (port from FigureViewer)
-- Include PDFs in scan index
+- [x] PDF display in viewport
+- [x] Optional whitespace trim (port from FigureViewer)
+- [x] Include PDFs in scan index
 
 ---
 
@@ -394,7 +395,7 @@ Before implementation begins, confirm:
 
 - [ ] Package name `figuregallery` and CLI `figuregallery` are acceptable.
 - [x] PyQt6 (approved over PyQt5).
-- [x] PDFs indexed but grayed until v2 display support.
+- [x] PDFs displayed (rasterize + optional trim).
 - [ ] Selection preservation on stem/filename toggle is acceptable.
 - [ ] Sort-change preserves current figure (not reset to index 0).
 - [x] Hotkey `Cmd+E` / `Ctrl+E` for Open enclosing folder.
