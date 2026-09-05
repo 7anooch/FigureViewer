@@ -15,6 +15,7 @@ __all__ = [
     "list_figures",
     "natural_key",
     "panel_display_labels",
+    "panels_from_directories",
     "parse_panels",
     "stem_lookup",
 ]
@@ -82,6 +83,14 @@ def panel_display_labels(directories: List[Path]) -> List[str]:
         split_labels = [parts[:-1] for parts in split_labels]
 
     return ["/".join(parts) for parts in split_labels]
+
+
+def panels_from_directories(directories: List[Path]) -> List[PanelConfig]:
+    labels = panel_display_labels(directories)
+    panels: List[PanelConfig] = []
+    for i, (directory, label) in enumerate(zip(directories, labels), start=1):
+        panels.append(PanelConfig(label=label or f"Panel {i}", directory=directory))
+    return panels
 
 
 def parse_panels(panel_text: str) -> List[PanelConfig]:

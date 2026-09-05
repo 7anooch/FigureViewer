@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
-from figureviewer.browsing import get_panel_configs
 from figureviewer.figures import (
     PanelConfig,
     common_stems,
     list_figures,
+    panels_from_directories,
     stem_lookup,
 )
 
@@ -24,7 +24,9 @@ class ViewportSnapshot:
 
 
 def _panel_figure_lists(session_state) -> Tuple[List[PanelConfig], List[List[Path]]]:
-    panels = get_panel_configs()
+    raw = session_state.get("panel_directories", [])
+    paths = [Path(p) for p in raw] if isinstance(raw, list) else []
+    panels = panels_from_directories(paths)
     valid_panels = [p for p in panels if p.directory.exists() and p.directory.is_dir()]
     if not valid_panels:
         return [], []

@@ -8,6 +8,7 @@ dependencies:
   - pyyaml
   - pillow>=10
   - pymupdf
-  - pyqt6>=6.4
+  # Avoid Qt 6.11.0/6.11.1: macOS cursor UAF crash (QTBUG-147602 / toCGImage).
+  - pyqt6>=6.4,!=6.11.0,!=6.11.1
   - pytest
   - pip

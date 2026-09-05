@@ -9,7 +9,7 @@ import streamlit as st
 
 from figurecommon.paths import resolve_path
 from figurecommon.sort import natural_key
-from figureviewer.figures import PanelConfig, panel_display_labels
+from figureviewer.figures import PanelConfig, panels_from_directories
 from figureviewer.settings import load_default_browse_root
 
 __all__ = [
@@ -25,6 +25,7 @@ __all__ = [
     "init_browse_state",
     "list_child_dirs",
     "navigate_tree",
+    "next_tree_stack",
     "path_widget_key",
     "pick_directory_dialog",
     "reset_tree_to_root",
@@ -56,15 +57,19 @@ def list_child_dirs(directory: Path) -> List[Path]:
     return sorted(children, key=lambda p: natural_key(p.name))
 
 
+def next_tree_stack(tree_stack: List[str], column_index: int, path: Path) -> List[str]:
+    """Finder-style: truncate stack at column and descend into path."""
+    resolved = str(path.resolve())
+    new_stack = list(tree_stack[: column_index + 1])
+    new_stack.append(resolved)
+    return new_stack
+
+
 def get_panel_configs() -> List[PanelConfig]:
     raw = st.session_state.get("panel_directories", [])
     paths: List[str] = [str(p) for p in raw] if isinstance(raw, list) else []
     directories = [Path(p) for p in paths]
-    labels = panel_display_labels(directories)
-    panels: List[PanelConfig] = []
-    for i, (directory, label) in enumerate(zip(directories, labels), start=1):
-        panels.append(PanelConfig(label=label or f"Panel {i}", directory=directory))
-    return panels
+    return panels_from_directories(directories)
 
 
 def add_panel_directory(path: Path) -> None:
@@ -105,14 +110,7 @@ def reset_tree_to_root(root: Path) -> None:
 
 def navigate_tree(column_index: int, path: Path) -> None:
     """Finder-style: truncate stack at column and descend into path."""
-    stack = get_tree_stack()
-    resolved = str(path.resolve())
-    new_stack = stack[: column_index + 1]
-    if column_index + 1 < len(new_stack):
-        new_stack[column_index + 1] = resolved
-    else:
-        new_stack.append(resolved)
-    st.session_state.tree_stack = new_stack
+    st.session_state.tree_stack = next_tree_stack(get_tree_stack(), column_index, path)
 
 
 def tree_column_levels(tree_stack: List[str]) -> List[tuple[Path, Optional[Path], List[Path]]]:

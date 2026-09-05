@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+import html
+import sys
+
+_fixed_font_family_cache: str | None = None
+
+
+def fixed_font_family() -> str:
+    """System fixed-pitch font for RichText (Qt has no CSS generic families)."""
+    global _fixed_font_family_cache
+    if _fixed_font_family_cache is None:
+        from PyQt6.QtGui import QFontDatabase
+
+        _fixed_font_family_cache = QFontDatabase.systemFont(
+            QFontDatabase.SystemFont.FixedFont
+        ).family()
+    return _fixed_font_family_cache
+
+
+def _modifier_label() -> str:
+    return "Cmd" if sys.platform == "darwin" else "Ctrl"
+
+
+def shortcut_entries() -> list[tuple[str, str]]:
+    """Keybinding list as (key, description) pairs."""
+    mod = _modifier_label()
+    return [
+        ("`", "Toggle focus: directories ↔ figures"),
+        ("← / →", "Previous / next figure (when figures focused)"),
+        ("Space", "Next figure (when figures focused)"),
+        (f"{mod}+← / {mod}+→", "First / last figure"),
+        ("Home / End", "First / last figure"),
+        ("↑ / ↓", "Move in directory column (when browser focused)"),
+        ("← / →", "Previous / next column; → drills into folder"),
+        ("Enter / Space", "Add / remove folder as panel (when browser focused)"),
+        (f"{mod}+E", "Reveal current figure in Finder"),
+        (f"Pinch / {mod}+scroll", "Zoom focused panel"),
+        (f"{mod}+= / {mod}+-", "Zoom in / out"),
+        (
+            "Double-click / Cmd+0" if sys.platform == "darwin" else f"Double-click / {mod}+0",
+            "Reset zoom",
+        ),
+    ]
+
+
+def shortcuts_help_lines() -> list[str]:
+    width = max(len(key) for key, _ in shortcut_entries())
+    return [f"{key.ljust(width)}  {desc}" for key, desc in shortcut_entries()]
+
+
+def shortcuts_help_text(*, for_console: bool = False) -> str:
+    lines = shortcuts_help_lines()
+    if for_console:
+        header = "Figure Viewer — keyboard shortcuts"
+        body = "\n".join(f"  {line}" for line in lines)
+        return f"{header}\n{body}"
+    return "Keyboard shortcuts:\n" + "\n".join(lines)
+
+
+def shortcuts_help_html() -> str:
+    family = html.escape(fixed_font_family())
+    rows = []
+    for key, desc in shortcut_entries():
+        key_html = html.escape(key)
+        desc_html = html.escape(desc)
+        rows.append(
+            "<tr>"
+            f'<td align="right" style="padding-right: 16px; font-family: &quot;{family}&quot;;">'
+            f"{key_html}</td>"
+            f'<td align="left">{desc_html}</td>'
+            "</tr>"
+        )
+    table = (
+        '<table cellspacing="0" cellpadding="2" '
+        'style="margin-left: auto; margin-right: auto;">'
+        + "".join(rows)
+        + "</table>"
+    )
+    return table
+
+
+def empty_state_html() -> str:
+    return (
+        '<div align="center">'
+        "<p>Select one or more directories to begin.</p>"
+        "<p><b>Keyboard shortcuts</b></p>"
+        f"{shortcuts_help_html()}"
+        "</div>"
+    )
+
+
+def empty_state_message() -> str:
+    return (
+        "Select one or more directories to begin.\n\n"
+        + shortcuts_help_text(for_console=False)
+    )

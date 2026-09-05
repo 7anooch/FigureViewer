@@ -104,6 +104,9 @@ class MainWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
+        # Non-movable: avoids Qt::SizeAllCursor on the drag handle. On macOS,
+        # Qt 6.11.0/6.11.1 can SIGTRAP converting that cursor (QTBUG-147602).
+        toolbar.setMovable(False)
         self.addToolBar(toolbar)
 
         open_action = QAction("Open…", self)
