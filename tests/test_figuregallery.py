@@ -293,3 +293,99 @@ def test_image_cache_set_max_items_trims_lru() -> None:
     assert cache.get(paths[0]) is None
     assert cache.get(paths[1]) is not None
     assert cache.get(paths[2]) is not None
+
+
+def test_settings_recent_roots_mru_dedupe_and_cap(tmp_path: Path, monkeypatch) -> None:
+    import figuregallery.settings as settings
+
+    config_dir = tmp_path / "config"
+    monkeypatch.setattr(settings, "_CONFIG_DIR", config_dir)
+    monkeypatch.setattr(settings, "_CONFIG_FILE", config_dir / "settings.json")
+
+    roots = []
+    for i in range(10):
+        d = tmp_path / f"root_{i}"
+        d.mkdir()
+        roots.append(d)
+
+    for d in roots:
+        settings.save_last_root(d)
+
+    assert settings.load_last_root() == roots[9].resolve()
+    recent = settings.load_recent_roots()
+    assert len(recent) == 8
+    assert recent[0] == roots[9].resolve()
+    assert recent[-1] == roots[2].resolve()
+
+    settings.save_last_root(roots[5])
+    recent = settings.load_recent_roots()
+    assert recent[0] == roots[5].resolve()
+    assert recent.count(roots[5].resolve()) == 1
+
+
+def test_root_picker_listing_and_navigation(tmp_path: Path) -> None:
+    from figuregallery.ui.root_picker import (
+        child_directories,
+        drill_into,
+        initial_list_parent,
+        navigate_up,
+    )
+
+    parent = tmp_path / "experiments"
+    a = parent / "run_a"
+    b = parent / "run_b"
+    nested = a / "cond1"
+    for d in (a, b, nested):
+        d.mkdir(parents=True)
+
+    assert initial_list_parent(a) == parent.resolve()
+    kids = child_directories(parent)
+    assert [p.name for p in kids] == ["run_a", "run_b"]
+
+    list_parent, selected = drill_into(a)
+    assert list_parent == a.resolve()
+    assert selected == nested.resolve()
+
+    empty = b / "empty"
+    empty.mkdir()
+    list_parent, selected = drill_into(empty)
+    assert list_parent == empty.resolve()
+    assert selected == empty.resolve()
+
+    up_parent, up_sel = navigate_up(list_parent=a.resolve(), selected=nested.resolve())
+    assert up_parent == parent.resolve()
+    assert up_sel == a.resolve()
+
+
+def test_category_label_reflects_directory_exclusions() -> None:
+    """Category counts show visible/total when Directories… exclusions are active."""
+    from figuregallery.ui.category_panel import category_list_label
+
+    root = Path("/tmp/gallery_label_test")
+    refs = [
+        _ref(root, "keep/a.png"),
+        _ref(root, "drop/a.png"),
+        _ref(root, "keep/b.png"),
+    ]
+    cat_a = Category(key="a", refs=[refs[0], refs[1]])
+    cat_b = Category(key="b", refs=[refs[2]])
+
+    assert category_list_label(cat_a, set()) == "a (2)"
+    assert category_list_label(cat_a, {Path("drop")}) == "a (1/2)"
+    assert category_list_label(cat_b, {Path("drop")}) == "b (1)"
+
+
+def test_figure_file_mime_data_uses_source_url(tmp_path: Path) -> None:
+    from figuregallery.ui.figure_transfer import figure_file_mime_data
+
+    path = tmp_path / "fig.pdf"
+    path.write_bytes(b"%PDF-1.4 test")
+
+    mime = figure_file_mime_data(path)
+    assert mime is not None
+    assert mime.hasUrls()
+    assert mime.urls()[0].toLocalFile() == str(path.resolve())
+    assert not mime.hasImage()
+    assert not mime.hasFormat("image/png")
+
+    assert figure_file_mime_data(tmp_path / "missing.png") is None

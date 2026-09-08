@@ -72,6 +72,15 @@ def test_viewport_snapshot_position_and_stem(tmp_path: Path) -> None:
     assert snap.current_label in stems
     assert snap.figure_paths[0].stem == snap.figure_paths[1].stem
 
+    # Unsynced local keys must use resolved directory paths (desktop slider keys).
+    state["sync_mode"] = False
+    panels = panels_from_directories([left, right])
+    key = f"local_idx_{panels[0].label}_{panels[0].directory.resolve()}"
+    state[key] = 1
+    snap = get_viewport_snapshot(state)
+    assert snap is not None
+    assert snap.figure_paths[0].name == "trial_002.png"
+
 
 def test_export_titles_and_metadata(tmp_path: Path) -> None:
     (tmp_path / "a").mkdir()
@@ -154,13 +163,50 @@ def test_unsync_global_nav_is_noop(tmp_path: Path) -> None:
     assert app is not None
 
 
-def test_column_browser_keyboard_toggle(tmp_path: Path) -> None:
+def test_figure_nav_shortcuts_are_window_scoped(tmp_path: Path) -> None:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtGui import QKeyEvent
+    from PyQt6.QtWidgets import QApplication, QLineEdit
+
+    from figuregallery.platform import configure_qt_plugins
+    from figureviewer.desktop.main_window import MainWindow
+
+    left = tmp_path / "left"
+    _png(left / "a.png")
+    _png(left / "b.png")
+
+    configure_qt_plugins()
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._state["panel_directories"] = [str(left)]
+    window._state["sync_mode"] = True
+    window._refresh_view()
+    assert window._figure_nav_shortcuts
+    assert all(
+        sc.context() == Qt.ShortcutContext.WindowShortcut for sc in window._figure_nav_shortcuts
+    )
+    assert all(sc.isEnabled() for sc in window._figure_nav_shortcuts)
+
+    window._state["sync_mode"] = False
+    window._sync_figure_nav_shortcuts()
+    assert all(not sc.isEnabled() for sc in window._figure_nav_shortcuts)
+
+    window._state["sync_mode"] = True
+    window._sync_figure_nav_shortcuts()
+    assert all(sc.isEnabled() for sc in window._figure_nav_shortcuts)
+    edit = QLineEdit()
+    assert MainWindow._is_text_entry(edit)
+
+    window.close()
+    del window
+    assert app is not None
+
+
+def test_directory_navigator_toggles_panel(tmp_path: Path) -> None:
+    from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication
 
     from figuregallery.platform import configure_qt_plugins
-    from figureviewer.desktop.column_browser import ColumnBrowser
+    from figureviewer.desktop.directory_navigator import DirectoryNavigator
     from figureviewer.viewer_state import ViewerState
 
     root = tmp_path / "root"
@@ -169,24 +215,26 @@ def test_column_browser_keyboard_toggle(tmp_path: Path) -> None:
 
     configure_qt_plugins()
     app = QApplication.instance() or QApplication([])
-    state = ViewerState(browse_root=str(root), tree_stack=[str(root)])
-    browser = ColumnBrowser(state)
-    assert len(browser._column_lists) == 1
-    column = browser._column_lists[0]
-    assert column.count() == 1
-    column.setCurrentRow(0)
-    column.setFocus()
-
-    space = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier)
-    browser.eventFilter(column, space)
+    state = ViewerState(browse_root=str(child), tree_stack=[str(child)])
+    nav = DirectoryNavigator(state)
+    # Opening on the child lists siblings under root (Gallery nearby pattern).
+    nav.open_for(child)
+    assert nav._nearby.count() >= 1
+    found = False
+    for i in range(nav._nearby.count()):
+        item = nav._nearby.item(i)
+        path = Path(str(item.data(Qt.ItemDataRole.UserRole)))
+        if path.resolve() == child.resolve():
+            nav._nearby.setCurrentRow(i)
+            found = True
+            break
+    assert found
+    nav._toggle_current()
     assert str(child.resolve()) in state["panel_directories"]
-
-    # refresh() rebuilds lists — use the live column for the second toggle
-    column = browser._column_lists[0]
-    column.setCurrentRow(0)
-    browser.eventFilter(column, space)
+    nav._toggle_current()
     assert str(child.resolve()) not in state["panel_directories"]
-    browser.deleteLater()
+    nav.close_picker(notify=False)
+    nav.deleteLater()
     assert app is not None
 
 
@@ -209,9 +257,9 @@ def test_viewport_cell_keeps_source_for_refit() -> None:
     assert cell._image_label.pixmap() is not None
     assert not cell._image_label.pixmap().isNull()
     cell._ignore_zoom_until = 0.0
-    cell.zoom_by(1.25)
+    cell.set_zoom_level(1.25)
     assert cell._zoom > 1.0
-    cell.reset_zoom()
+    cell.set_zoom_level(1.0)
     assert abs(cell._zoom - 1.0) < 1e-3
     cell.deleteLater()
     assert app is not None
@@ -247,7 +295,7 @@ def test_viewport_prefetch_queues_uncached_paths(tmp_path: Path) -> None:
     assert app is not None
 
 
-def test_viewport_zoom_targets_focused_cell(tmp_path: Path) -> None:
+def test_viewport_zoom_applies_to_all_panels(tmp_path: Path) -> None:
     from PyQt6.QtGui import QImage
     from PyQt6.QtWidgets import QApplication
 
@@ -274,7 +322,6 @@ def test_viewport_zoom_targets_focused_cell(tmp_path: Path) -> None:
         index=0,
         total=1,
     )
-    # Seed cache so show_snapshot applies immediately
     img = QImage(32, 24, QImage.Format.Format_RGB32)
     img.fill(0x445566)
     for path in snap.figure_paths:
@@ -282,18 +329,78 @@ def test_viewport_zoom_targets_focused_cell(tmp_path: Path) -> None:
         vp._cache.put(path, img, pdf_dpi=200, trim=False)
     vp.show_snapshot(snap, sync_mode=True)
     assert len(vp._cells) == 2
-    assert vp._cells[0]._source is not None
-    assert vp._cells[1]._source is not None
     assert vp.focused_figure_path() is not None
-    vp._on_cell_focus(vp._cells[1])
-    for cell in vp._cells:
-        cell._ignore_zoom_until = 0.0
+    vp._ignore_zoom_until = 0.0
     vp.zoom_by(1.5)
-    assert vp._focused is vp._cells[1]
-    assert vp._cells[1]._zoom == 1.5
-    assert abs(vp._cells[0]._zoom - 1.0) < 1e-3
+    assert abs(vp._zoom - 1.5) < 1e-3
+    assert abs(vp._cells[0]._zoom - 1.5) < 1e-3
+    assert abs(vp._cells[1]._zoom - 1.5) < 1e-3
     vp.reset_zoom()
+    assert abs(vp._zoom - 1.0) < 1e-3
+    assert abs(vp._cells[0]._zoom - 1.0) < 1e-3
     assert abs(vp._cells[1]._zoom - 1.0) < 1e-3
+    vp.deleteLater()
+    assert app is not None
+
+
+def test_viewport_restores_keyboard_focus_after_snapshot(tmp_path: Path) -> None:
+    """←/→ are viewport-scoped; flipping must re-attach focus after cells are rebuilt."""
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    from figuregallery.platform import configure_qt_plugins
+    from figureviewer.desktop.viewport import MultiPanelViewport
+    from figureviewer.display_state import ViewportSnapshot
+    from figureviewer.figures import panels_from_directories
+
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    _png(left / "a.png")
+    _png(left / "b.png")
+    _png(right / "a.png")
+    _png(right / "b.png")
+    panels = panels_from_directories([left, right])
+
+    configure_qt_plugins()
+    app = QApplication.instance() or QApplication([])
+    vp = MultiPanelViewport()
+    vp.show()
+    vp.resize(640, 480)
+    vp.activateWindow()
+    app.processEvents()
+    img = QImage(32, 24, QImage.Format.Format_RGB32)
+    img.fill(0x445566)
+
+    def _snap(index: int, name: str) -> ViewportSnapshot:
+        paths = [left / name, right / name]
+        for path in paths:
+            vp._cache.put(path, img, pdf_dpi=200, trim=False)
+        return ViewportSnapshot(
+            panels=panels,
+            figure_paths=paths,
+            current_label=str(index + 1),
+            columns_per_row=2,
+            index=index,
+            total=2,
+        )
+
+    vp.show_snapshot(_snap(0, "a.png"), sync_mode=True)
+    app.processEvents()
+    vp.focus_display()
+    app.processEvents()
+
+    vp.show_snapshot(_snap(1, "b.png"), sync_mode=True)
+    app.processEvents()
+    assert len(vp._cells) == 2
+    assert all(abs(cell._zoom - 1.0) < 1e-3 for cell in vp._cells)
+    # After nav, main window calls focus_display — same contract here
+    vp.focus_display()
+    app.processEvents()
+    fw = QApplication.focusWidget()
+    if fw is not None:
+        # When the platform allows focus, it must land inside the viewport again
+        assert vp.isAncestorOf(fw)
+
     vp.deleteLater()
     assert app is not None
 
@@ -302,10 +409,10 @@ def test_viewer_shortcuts_empty_state() -> None:
     from figureviewer.desktop.shortcuts import empty_state_html, empty_state_message, shortcut_entries
 
     entries = shortcut_entries()
-    assert any("Toggle focus" in desc for _, desc in entries)
+    assert any("directory navigator" in desc.lower() for _, desc in entries)
     html = empty_state_html()
     assert "Keyboard shortcuts" in html
-    assert "Select one or more directories" in empty_state_message()
+    assert "Directories" in empty_state_message() or "`" in empty_state_message()
 
 
 def test_sticky_prefs_roundtrip(tmp_path: Path, monkeypatch) -> None:

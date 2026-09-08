@@ -86,7 +86,7 @@ def get_viewport_snapshot(
             if index < len(figures):
                 chosen = figures[index]
         else:
-            local_key = f"local_idx_{panel.label}_{panel.directory}"
+            local_key = f"local_idx_{panel.label}_{panel.directory.resolve()}"
             local_idx = session_state.get(local_key, 0)
             if local_idx < len(figures):
                 chosen = figures[local_idx]

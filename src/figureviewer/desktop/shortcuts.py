@@ -26,20 +26,21 @@ def shortcut_entries() -> list[tuple[str, str]]:
     """Keybinding list as (key, description) pairs."""
     mod = _modifier_label()
     return [
-        ("`", "Toggle focus: directories ↔ figures"),
-        ("← / →", "Previous / next figure (when figures focused)"),
-        ("Space", "Next figure (when figures focused)"),
+        ("` / " + f"{mod}+D", "Show / hide directory navigator"),
+        ("← / →", "Previous / next figure"),
+        ("Space", "Next figure"),
         (f"{mod}+← / {mod}+→", "First / last figure"),
         ("Home / End", "First / last figure"),
-        ("↑ / ↓", "Move in directory column (when browser focused)"),
-        ("← / →", "Previous / next column; → drills into folder"),
-        ("Enter / Space", "Add / remove folder as panel (when browser focused)"),
+        ("↑ / ↓", "Move in directory list (when navigator open)"),
+        ("← / →", "Up / into folder (when navigator open)"),
+        ("Enter / Space", "Add / remove folder as panel (navigator)"),
+        ("Esc", "Close directory navigator"),
         (f"{mod}+E", "Reveal current figure in Finder"),
-        (f"Pinch / {mod}+scroll", "Zoom focused panel"),
-        (f"{mod}+= / {mod}+-", "Zoom in / out"),
+        (f"Pinch / {mod}+scroll", "Zoom all panels"),
+        (f"{mod}+= / {mod}+-", "Zoom in / out (all panels)"),
         (
             "Double-click / Cmd+0" if sys.platform == "darwin" else f"Double-click / {mod}+0",
-            "Reset zoom",
+            "Reset zoom (all panels)",
         ),
     ]
 
@@ -83,7 +84,7 @@ def shortcuts_help_html() -> str:
 def empty_state_html() -> str:
     return (
         '<div align="center">'
-        "<p>Select one or more directories to begin.</p>"
+        "<p>Press <b>`</b> or use <b>Directories</b> to add panel folders.</p>"
         "<p><b>Keyboard shortcuts</b></p>"
         f"{shortcuts_help_html()}"
         "</div>"
@@ -92,6 +93,6 @@ def empty_state_html() -> str:
 
 def empty_state_message() -> str:
     return (
-        "Select one or more directories to begin.\n\n"
+        "Press ` or use Directories to add panel folders.\n\n"
         + shortcuts_help_text(for_console=False)
     )

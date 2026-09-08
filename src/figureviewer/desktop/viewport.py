@@ -13,6 +13,7 @@ from PyQt6.QtGui import (
     QWheelEvent,
 )
 from PyQt6.QtWidgets import (
+    QApplication,
     QGridLayout,
     QLabel,
     QScrollArea,
@@ -30,16 +31,14 @@ from figureviewer.display_state import ViewportSnapshot
 _MIN_ZOOM = 0.25
 _MAX_ZOOM = 8.0
 _GESTURE_SUPPRESS_S = 0.35
-_ZOOM_HINT_FIT = "Zoom: Fit  ·  click a panel  ·  pinch or ⌘/Ctrl+scroll  ·  double-click to reset"
-_FOCUS_STYLE = "border: 2px solid #3b82f6; border-radius: 4px; background: #f8fafc;"
-_IDLE_STYLE = "border: 2px solid transparent; border-radius: 4px;"
+_ZOOM_HINT_FIT = "Zoom: Fit  ·  pinch or ⌘/Ctrl+scroll  ·  double-click to reset"
 
 
 class _PanelCell(QWidget):
-    """One panel: fit/natural/custom at zoom 1.0; Gallery-style zoom when focused."""
+    """One panel: fit/natural/custom at zoom 1.0; gestures request shared viewport zoom."""
 
-    focus_requested = pyqtSignal(object)
-    zoom_hint_changed = pyqtSignal(str)
+    zoom_by_requested = pyqtSignal(float, object)  # factor, optional QPoint
+    reset_zoom_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -73,9 +72,6 @@ class _PanelCell(QWidget):
         self._fill = True
         self._logical_width: int | None = None
         self._zoom = 1.0
-        self._focused = False
-        self._ignore_zoom_until = 0.0
-        self._last_zoom_hint: str | None = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(4, 4, 4, 4)
@@ -83,7 +79,6 @@ class _PanelCell(QWidget):
         layout.addWidget(self._local_slider)
         layout.addWidget(self._scroll, stretch=1)
         layout.addWidget(self._message)
-        self.setStyleSheet(_IDLE_STYLE)
 
     def set_title(self, text: str) -> None:
         self._title.setText(text)
@@ -91,29 +86,26 @@ class _PanelCell(QWidget):
     def set_figure_path(self, path: Path | None) -> None:
         self._figure_path = path
 
-    def set_focused(self, focused: bool) -> None:
-        self._focused = focused
-        self.setStyleSheet(_FOCUS_STYLE if focused else _IDLE_STYLE)
-        if not focused and abs(self._zoom - 1.0) >= 1e-3:
-            self.reset_zoom()
-        elif focused and self._source is not None:
-            self._emit_zoom_hint(
-                _ZOOM_HINT_FIT
-                if abs(self._zoom - 1.0) < 1e-3
-                else f"Zoom: {self._zoom * 100:.0f}%  ·  two-finger scroll to pan  ·  double-click to reset"
-            )
-
-    def set_image(self, image: QImage, *, fill: bool, logical_width: int | None = None) -> None:
-        self._suppress_zoom_gestures()
+    def set_image(self, image: QImage, *, fill: bool, logical_width: int | None = None, zoom: float = 1.0) -> None:
         self._source = image
         self._fill = fill
         self._logical_width = logical_width
-        self._zoom = 1.0
+        self._zoom = zoom
         self._message.hide()
         self._scroll.show()
         self._prepare_default_view()
         self._update_pixmap(anchor=None)
-        QTimer.singleShot(0, self._refit_if_default_zoom)
+        if abs(zoom - 1.0) < 1e-3:
+            QTimer.singleShot(0, self._refit_if_default_zoom)
+
+    def set_loading(self) -> None:
+        """Placeholder while the figure loads — keep path for reveal."""
+        self._source = None
+        self._zoom = 1.0
+        self._prepare_default_view()
+        self._scroll.hide()
+        self._message.setText("Loading…")
+        self._message.show()
 
     def set_message(self, text: str) -> None:
         self._source = None
@@ -123,34 +115,21 @@ class _PanelCell(QWidget):
         self._scroll.hide()
         self._message.setText(text)
         self._message.show()
-        self._emit_zoom_hint("")
 
     def refit(self) -> None:
         if self._source is not None and not self._source.isNull():
             self._update_pixmap(anchor=None)
 
-    def reset_zoom(self) -> None:
-        if self._source is None:
-            return
-        self._suppress_zoom_gestures()
-        self._zoom = 1.0
-        self._prepare_default_view()
-        self._update_pixmap(anchor=None)
-        QTimer.singleShot(0, self._refit_if_default_zoom)
-
-    def zoom_by(self, factor: float, *, anchor: QPoint | None = None) -> None:
+    def set_zoom_level(self, zoom: float, *, anchor: QPoint | None = None) -> None:
         if self._source is None or self._source.isNull():
             return
-        if time.monotonic() < self._ignore_zoom_until:
-            return
-        new_zoom = max(_MIN_ZOOM, min(_MAX_ZOOM, self._zoom * factor))
-        if abs(new_zoom - self._zoom) < 1e-4:
-            return
-        self._zoom = new_zoom
+        self._zoom = zoom
         self._update_pixmap(anchor=anchor)
+        if abs(zoom - 1.0) < 1e-3:
+            QTimer.singleShot(0, self._refit_if_default_zoom)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        self.focus_requested.emit(self)
+        self._scroll.setFocus(Qt.FocusReason.MouseFocusReason)
         super().mousePressEvent(event)
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
@@ -169,11 +148,11 @@ class _PanelCell(QWidget):
                 return self._handle_wheel(event)
             if etype == QEvent.Type.MouseButtonDblClick:
                 if self._source is not None:
-                    self.focus_requested.emit(self)
-                    self.reset_zoom()
+                    self._scroll.setFocus(Qt.FocusReason.MouseFocusReason)
+                    self.reset_zoom_requested.emit()
                     return True
             if etype == QEvent.Type.MouseButtonPress:
-                self.focus_requested.emit(self)
+                self._scroll.setFocus(Qt.FocusReason.MouseFocusReason)
         return super().eventFilter(obj, event)
 
     def event(self, event) -> bool:  # noqa: ANN001
@@ -181,9 +160,6 @@ class _PanelCell(QWidget):
             if self._handle_native_gesture(event):
                 return True
         return super().event(event)
-
-    def _suppress_zoom_gestures(self) -> None:
-        self._ignore_zoom_until = time.monotonic() + _GESTURE_SUPPRESS_S
 
     def _prepare_default_view(self) -> None:
         self._image_label.clear()
@@ -202,18 +178,12 @@ class _PanelCell(QWidget):
             return False
         if event.gestureType() != Qt.NativeGestureType.ZoomNativeGesture:
             return False
-        self.focus_requested.emit(self)
-        if not self._focused:
-            # Focus lands asynchronously via slot; allow this gesture after focus.
-            self._focused = True
-            self.setStyleSheet(_FOCUS_STYLE)
-        if time.monotonic() < self._ignore_zoom_until:
-            return True
+        self._scroll.setFocus(Qt.FocusReason.MouseFocusReason)
         factor = 1.0 + float(event.value())
         if factor <= 0:
             return True
         anchor = self._scroll.viewport().mapFromGlobal(event.globalPosition().toPoint())
-        self.zoom_by(factor, anchor=anchor)
+        self.zoom_by_requested.emit(factor, anchor)
         return True
 
     def _handle_wheel(self, event: QWheelEvent) -> bool:
@@ -221,19 +191,14 @@ class _PanelCell(QWidget):
             return False
         modifiers = event.modifiers()
         if modifiers & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier):
-            self.focus_requested.emit(self)
-            if not self._focused:
-                self._focused = True
-                self.setStyleSheet(_FOCUS_STYLE)
-            if time.monotonic() < self._ignore_zoom_until:
-                return True
+            self._scroll.setFocus(Qt.FocusReason.MouseFocusReason)
             delta = event.angleDelta().y()
             if delta == 0:
                 delta = event.pixelDelta().y()
             if delta == 0:
                 return False
             factor = 1.1 if delta > 0 else 1.0 / 1.1
-            self.zoom_by(factor, anchor=event.position().toPoint())
+            self.zoom_by_requested.emit(factor, event.position().toPoint())
             return True
         if self._zoom > 1.0 + 1e-3:
             return False  # let scroll area pan
@@ -302,21 +267,6 @@ class _PanelCell(QWidget):
             hbar.setValue(0)
             vbar.setValue(0)
 
-        if not self._focused:
-            return
-        if abs(self._zoom - 1.0) < 1e-3:
-            self._emit_zoom_hint(_ZOOM_HINT_FIT)
-        else:
-            self._emit_zoom_hint(
-                f"Zoom: {self._zoom * 100:.0f}%  ·  two-finger scroll to pan  ·  double-click to reset"
-            )
-
-    def _emit_zoom_hint(self, hint: str) -> None:
-        if self._last_zoom_hint == hint:
-            return
-        self._last_zoom_hint = hint
-        self.zoom_hint_changed.emit(hint)
-
 
 class MultiPanelViewport(QWidget):
     local_index_changed = pyqtSignal(str, int)
@@ -341,7 +291,9 @@ class MultiPanelViewport(QWidget):
         self._custom_width = 700
         self._display_mode = "Fill panel"
         self._cells: list[_PanelCell] = []
-        self._focused: _PanelCell | None = None
+        self._zoom = 1.0
+        self._ignore_zoom_until = 0.0
+        self._last_zoom_hint: str | None = None
 
         self._grid = QGridLayout()
         inner = QWidget()
@@ -366,14 +318,13 @@ class MultiPanelViewport(QWidget):
         self._idle_timer.start()
 
     def focus_display(self) -> None:
-        """Put keyboard focus on the figure surface (for scoped nav shortcuts)."""
-        if self._focused is not None:
-            self._focused._scroll.setFocus(Qt.FocusReason.ShortcutFocusReason)
-            return
-        if self._scroll.isVisible() and not self._empty.isVisible():
-            self._scroll.setFocus(Qt.FocusReason.ShortcutFocusReason)
-        else:
+        """Put keyboard focus on the figure surface (for chrome that still expects it)."""
+        if self._empty.isVisible():
             self.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            return
+        # Outer scroll stays visible even while panel cells show "Loading…"
+        # (per-cell scrolls are hidden then, so focusing them can fail).
+        self._scroll.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def set_display_options(self, *, display_mode: str, custom_width: int, pdf_dpi: int, trim: bool) -> None:
         dpi_changed = pdf_dpi != self._pdf_dpi
@@ -410,37 +361,55 @@ class MultiPanelViewport(QWidget):
         self._prefetch_next()
 
     def focused_figure_path(self) -> Path | None:
-        """Path of the focused panel’s current figure (for Reveal in Finder)."""
-        if self._focused is not None and self._focused._figure_path is not None:
-            return self._focused._figure_path
+        """Path of the first loaded panel figure (for Reveal in Finder)."""
         for cell in self._cells:
             if cell._figure_path is not None:
                 return cell._figure_path
         return None
 
-    def zoom_by(self, factor: float) -> None:
-        cell = self._ensure_focused_cell()
-        if cell is not None:
-            cell.zoom_by(factor)
+    def zoom_by(self, factor: float, *, anchor: QPoint | None = None, source: _PanelCell | None = None) -> None:
+        if time.monotonic() < self._ignore_zoom_until:
+            return
+        if not any(cell._source is not None for cell in self._cells):
+            return
+        new_zoom = max(_MIN_ZOOM, min(_MAX_ZOOM, self._zoom * factor))
+        if abs(new_zoom - self._zoom) < 1e-4:
+            return
+        self._zoom = new_zoom
+        for cell in self._cells:
+            cell_anchor = anchor if cell is source else None
+            cell.set_zoom_level(self._zoom, anchor=cell_anchor)
+        self._emit_zoom_hint()
 
     def reset_zoom(self) -> None:
-        cell = self._ensure_focused_cell()
-        if cell is not None:
-            cell.reset_zoom()
+        self._suppress_zoom_gestures()
+        self._zoom = 1.0
+        for cell in self._cells:
+            if cell._source is not None:
+                cell.set_zoom_level(1.0, anchor=None)
+        self._emit_zoom_hint()
 
     def show_message(self, text: str, *, rich: bool = False) -> None:
         self._clear_cells()
         self._prefetch_queue = []
+        self._zoom = 1.0
         self._empty.setTextFormat(
             Qt.TextFormat.RichText if rich else Qt.TextFormat.PlainText
         )
         self._empty.setText(text)
         self._empty.show()
         self.zoom_hint_changed.emit("")
+        self._last_zoom_hint = None
 
     def show_snapshot(self, snapshot: ViewportSnapshot, *, sync_mode: bool = True) -> None:
         self._empty.hide()
+        # Cells are destroyed below — remember if keyboard focus lived in this viewport
+        # so ←/→ (WidgetWithChildrenShortcut) keep working after the flip.
+        fw = QApplication.focusWidget()
+        restore_keyboard = fw is not None and (fw is self or self.isAncestorOf(fw))
         self._clear_cells()
+        self._suppress_zoom_gestures()
+        self._zoom = 1.0
         self._prefetch_queue = []
         self._panel_count = max(len(snapshot.panels), 1)
         self._apply_browse_budget()
@@ -448,8 +417,8 @@ class MultiPanelViewport(QWidget):
         self._pending = []
         for i, (panel, path) in enumerate(zip(snapshot.panels, snapshot.figure_paths)):
             cell = _PanelCell()
-            cell.focus_requested.connect(self._on_cell_focus)
-            cell.zoom_hint_changed.connect(self.zoom_hint_changed.emit)
+            cell.zoom_by_requested.connect(self._on_cell_zoom_by)
+            cell.reset_zoom_requested.connect(self.reset_zoom)
             row, col = divmod(i, cols)
             self._grid.addWidget(cell, row, col)
             self._cells.append(cell)
@@ -465,9 +434,14 @@ class MultiPanelViewport(QWidget):
                 figs = list_figures(panel.directory, recursive=False)
                 cell._local_slider.setVisible(True)
                 cell._local_slider.setMaximum(max(len(figs) - 1, 0))
-                key = f"local_idx_{panel.label}_{panel.directory}"
+                key = f"local_idx_{panel.label}_{panel.directory.resolve()}"
                 cell._local_slider.blockSignals(True)
-                cell._local_slider.setValue(figs.index(path) if path in figs else 0)
+                try:
+                    local_val = figs.index(path)
+                except ValueError:
+                    resolved = {str(p.resolve()): idx for idx, p in enumerate(figs)}
+                    local_val = resolved.get(str(path.resolve()), 0)
+                cell._local_slider.setValue(local_val)
                 cell._local_slider.blockSignals(False)
                 cell._local_slider.valueChanged.connect(
                     lambda value, k=key: self.local_index_changed.emit(k, int(value))
@@ -476,16 +450,40 @@ class MultiPanelViewport(QWidget):
             if cached is not None:
                 self._apply_image(cell, cached)
             else:
-                cell.set_message("Loading…")
+                cell.set_loading()
                 self._pending.append((i, path))
         self._load_next()
         QTimer.singleShot(0, self._refit_cells)
-        # Focus first panel that already has pixels (cached); async loads focus in _on_loaded.
-        self._focus_first_image_cell()
+        self._emit_zoom_hint()
+        if restore_keyboard:
+            QTimer.singleShot(0, self.focus_display)
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._refit_cells()
+
+    def _suppress_zoom_gestures(self) -> None:
+        self._ignore_zoom_until = time.monotonic() + _GESTURE_SUPPRESS_S
+
+    def _on_cell_zoom_by(self, factor: float, anchor: object) -> None:
+        source = self.sender()
+        cell = source if isinstance(source, _PanelCell) else None
+        point = anchor if isinstance(anchor, QPoint) else None
+        self.zoom_by(factor, anchor=point, source=cell)
+
+    def _emit_zoom_hint(self) -> None:
+        if not any(cell._source is not None for cell in self._cells):
+            hint = ""
+        elif abs(self._zoom - 1.0) < 1e-3:
+            hint = _ZOOM_HINT_FIT
+        else:
+            hint = (
+                f"Zoom: {self._zoom * 100:.0f}%  ·  two-finger scroll to pan  ·  double-click to reset"
+            )
+        if self._last_zoom_hint == hint:
+            return
+        self._last_zoom_hint = hint
+        self.zoom_hint_changed.emit(hint)
 
     def _apply_browse_budget(self) -> None:
         budget = self._pacing.budget
@@ -497,33 +495,6 @@ class MultiPanelViewport(QWidget):
     def _on_idle_tick(self) -> None:
         if self._pacing.decay_if_idle() is not None:
             self._apply_browse_budget()
-
-    def _focus_first_image_cell(self) -> None:
-        if self._focused is not None and self._focused in self._cells:
-            return
-        for cell in self._cells:
-            if cell._source is not None:
-                self._on_cell_focus(cell)
-                return
-
-    def _ensure_focused_cell(self) -> _PanelCell | None:
-        if self._focused is not None and self._focused in self._cells and self._focused._source is not None:
-            return self._focused
-        for cell in self._cells:
-            if cell._source is not None:
-                self._on_cell_focus(cell)
-                return cell
-        return None
-
-    def _on_cell_focus(self, cell: _PanelCell) -> None:
-        if cell not in self._cells:
-            return
-        if self._focused is cell:
-            return
-        if self._focused is not None and self._focused in self._cells:
-            self._focused.set_focused(False)
-        self._focused = cell
-        cell.set_focused(True)
 
     def _refit_cells(self) -> None:
         for cell in self._cells:
@@ -559,8 +530,6 @@ class MultiPanelViewport(QWidget):
         self._pending.pop(0)
         if index < len(self._cells):
             self._apply_image(self._cells[index], image)
-            if self._focused is None:
-                self._on_cell_focus(self._cells[index])
         self._load_next()
 
     def _on_failed(self, path_str: str, message: str) -> None:
@@ -587,13 +556,12 @@ class MultiPanelViewport(QWidget):
 
     def _apply_image(self, cell: _PanelCell, image: QImage) -> None:
         if self._display_mode == "Custom width":
-            cell.set_image(image, fill=False, logical_width=self._custom_width)
+            cell.set_image(image, fill=False, logical_width=self._custom_width, zoom=self._zoom)
         else:
-            cell.set_image(image, fill=self._fill)
+            cell.set_image(image, fill=self._fill, zoom=self._zoom)
 
     def _clear_cells(self) -> None:
         self._pending = []
-        self._focused = None
         for cell in self._cells:
             self._grid.removeWidget(cell)
             cell.deleteLater()

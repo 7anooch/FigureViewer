@@ -181,15 +181,26 @@ Both apps address gaps in Finder for neuroscience figure review. They are comple
 | `Cmd+O` / `Ctrl+O` | Open root directory |
 | `Cmd+E` / `Ctrl+E` | Open enclosing folder |
 | `Cmd+R` / `Ctrl+R` | Rescan |
-| `` ` `` | Toggle focus: categories ↔ figure |
+| `Cmd+P` / `Ctrl+P` | Export PDF |
+| `` ` `` | Cycle focus: figure → categories → root picker → figure |
 | `←` on first figure | Focus category list |
 | `→` from category list | Focus figure |
+| `←` from category list | Open root picker (Nearby siblings + Recent) |
+| Root picker `↑` / `↓` | Move in Nearby or Recent list |
+| Root picker `←` / `→` | Up directory / drill into folder |
+| Root picker `Enter` | Open selected directory as scan root and close picker |
+| Root picker `Esc` | Close picker without scanning |
+| Root picker `Tab` | Toggle focus: Nearby ↔ Recent |
 | `Space` / `Enter` | Next figure (toggle category check when list focused) |
 | `↑` / `↓` | Move in category list (when focused) |
 | `/` | Jump to category filter (when list focused) |
 | `A` | Select / deselect all visible categories (when list focused) |
+| `H` | This folder only (toggle) |
+| `S` | Cycle sort order (Category → Path ↔ Path → Category) |
+| `Cmd+C` / `Ctrl+C` | Copy current figure **file** to clipboard (when figure focused) |
+| Drag figure | Drag the source file out to other apps |
 
-Shortcuts for figure navigation apply when the viewport has focus. Use `` ` `` or the edge-arrow handoff above to move between the category list and the figure.
+Shortcuts for figure navigation apply when the viewport has focus. Use `` ` `` to cycle figure → categories → root picker (and back), or the edge-arrow handoff (`←`/`→`) between categories and the figure. From categories, `←` also opens the root picker for nearby / recent directories without a file dialog.
 
 ### Category filter
 

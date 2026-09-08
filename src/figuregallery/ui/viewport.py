@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 from PyQt6.QtCore import QEvent, QPoint, Qt, QSize, QTimer, pyqtSignal
-from PyQt6.QtGui import QImage, QNativeGestureEvent, QPixmap, QWheelEvent
+from PyQt6.QtGui import (
+    QDrag,
+    QImage,
+    QMouseEvent,
+    QNativeGestureEvent,
+    QPixmap,
+    QWheelEvent,
+)
 from PyQt6.QtWidgets import (
+    QApplication,
     QLabel,
     QScrollArea,
     QSizePolicy,
@@ -12,10 +21,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from figuregallery.ui.figure_transfer import figure_file_mime_data
+
 _MIN_ZOOM = 0.25
 _MAX_ZOOM = 8.0
 _GESTURE_SUPPRESS_S = 0.35
-_ZOOM_HINT_FIT = "Zoom: Fit  ·  pinch or ⌘/Ctrl+scroll to zoom  ·  double-click to reset"
+_ZOOM_HINT_FIT = (
+    "Zoom: Fit  ·  pinch or ⌘/Ctrl+scroll to zoom  ·  drag out or ⌘/Ctrl+C to copy"
+)
 
 
 class FigureViewport(QWidget):
@@ -25,9 +38,17 @@ class FigureViewport(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._current_image: QImage | None = None
+        self._source_path: Path | None = None
+        self._drag_start: QPoint | None = None
+        self._zoom = 1.0  # 1.0 = fit in view
+        self._ignore_zoom_until = 0.0
+
         self._image_label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self._image_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._image_label.setScaledContents(False)
+        self._image_label.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._image_label.installEventFilter(self)
 
         self._scroll = QScrollArea()
         self._scroll.setWidget(self._image_label)
@@ -47,9 +68,6 @@ class FigureViewport(QWidget):
         layout.addWidget(self._scroll, stretch=1)
         layout.addWidget(self._message_label)
 
-        self._current_image: QImage | None = None
-        self._zoom = 1.0  # 1.0 = fit in view
-        self._ignore_zoom_until = 0.0
         self.set_message("")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
@@ -62,6 +80,8 @@ class FigureViewport(QWidget):
 
     def set_message(self, text: str, *, rich: bool = False) -> None:
         self._current_image = None
+        self._source_path = None
+        self._drag_start = None
         self._zoom = 1.0
         self._prepare_default_view()
         self._scroll.hide()
@@ -75,6 +95,8 @@ class FigureViewport(QWidget):
 
     def set_loading(self) -> None:
         self._current_image = None
+        self._source_path = None
+        self._drag_start = None
         self._zoom = 1.0
         self._prepare_default_view()
         # Keep the scroll area shown so focus does not jump to the category filter.
@@ -86,9 +108,12 @@ class FigureViewport(QWidget):
         self._message_label.hide()
         # Stay on the Fit hint while loading (do not hide — that causes a flash).
         self._emit_zoom_hint(_ZOOM_HINT_FIT)
-    def set_image(self, image: QImage) -> None:
+
+    def set_image(self, image: QImage, *, source_path: Path | None = None) -> None:
         self._suppress_zoom_gestures()
         self._current_image = image
+        self._source_path = source_path
+        self._drag_start = None
         self._zoom = 1.0
         self._message_label.hide()
         self._prepare_default_view()
@@ -97,6 +122,19 @@ class FigureViewport(QWidget):
         # Scrollbars from the previous (zoomed) figure can shrink the viewport;
         # refit once layout settles so every figure truly fits the window.
         QTimer.singleShot(0, self._refit_if_default_zoom)
+
+    def copy_to_clipboard(self) -> bool:
+        """Copy the current figure's source file to the clipboard. Returns True on success."""
+        if self._source_path is None:
+            return False
+        mime = figure_file_mime_data(self._source_path)
+        if mime is None:
+            return False
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            return False
+        clipboard.setMimeData(mime)
+        return True
 
     def reset_zoom(self) -> None:
         if self._current_image is None:
@@ -124,6 +162,8 @@ class FigureViewport(QWidget):
             self._update_pixmap(anchor=None)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        if obj is self._image_label and self._handle_image_drag_event(event):
+            return True
         if obj is self._scroll.viewport():
             etype = event.type()
             if etype == QEvent.Type.NativeGesture and isinstance(event, QNativeGestureEvent):
@@ -140,6 +180,55 @@ class FigureViewport(QWidget):
             if self._handle_native_gesture(event):
                 return True
         return super().event(event)
+
+    def _handle_image_drag_event(self, event) -> bool:  # noqa: ANN001
+        if self._current_image is None or self._current_image.isNull():
+            return False
+        etype = event.type()
+        if etype == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._drag_start = event.position().toPoint()
+            return False
+        if etype == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
+            if event.button() == Qt.MouseButton.LeftButton:
+                self._drag_start = None
+            return False
+        if etype == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
+            if self._drag_start is None or not (event.buttons() & Qt.MouseButton.LeftButton):
+                return False
+            delta = event.position().toPoint() - self._drag_start
+            if delta.manhattanLength() < QApplication.startDragDistance():
+                return False
+            self._start_external_drag(event.position().toPoint())
+            self._drag_start = None
+            return True
+        return False
+
+    def _start_external_drag(self, hotspot: QPoint) -> None:
+        if self._source_path is None:
+            return
+        mime = figure_file_mime_data(self._source_path)
+        if mime is None:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        preview = self._image_label.pixmap()
+        if preview is not None and not preview.isNull():
+            max_edge = 160
+            scaled = preview.scaled(
+                max_edge,
+                max_edge,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            drag.setPixmap(scaled)
+            drag.setHotSpot(
+                QPoint(
+                    min(max(hotspot.x(), 0), scaled.width()),
+                    min(max(hotspot.y(), 0), scaled.height()),
+                )
+            )
+        drag.exec(Qt.DropAction.CopyAction)
 
     def _suppress_zoom_gestures(self) -> None:
         self._ignore_zoom_until = time.monotonic() + _GESTURE_SUPPRESS_S
@@ -251,7 +340,8 @@ class FigureViewport(QWidget):
             hint = _ZOOM_HINT_FIT
         else:
             hint = (
-                f"Zoom: {self._zoom * 100:.0f}%  ·  two-finger scroll to pan  ·  double-click to reset"
+                f"Zoom: {self._zoom * 100:.0f}%  ·  two-finger scroll to pan  ·  "
+                "drag out or ⌘/Ctrl+C to copy"
             )
         self._emit_zoom_hint(hint)
 

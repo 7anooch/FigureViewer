@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from figuregallery.models import GroupMode, SortMode
+from figuregallery.settings import load_last_root
 from figuregallery.shortcuts import shortcuts_help_text
 from figuregallery.ui.app import run
 
@@ -50,6 +51,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"error: not a directory: {resolved}", file=sys.stderr)
             raise SystemExit(1)
         initial_root = resolved
+    else:
+        initial_root = load_last_root()
 
     quiet = os.environ.get("FIGUREGALLERY_QUIET") == "1" or not sys.stderr.isatty()
     if not quiet:

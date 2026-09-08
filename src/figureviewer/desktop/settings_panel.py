@@ -36,10 +36,6 @@ class SettingsPanel(QWidget):
         self.setMinimumWidth(240)
         self.setMaximumWidth(340)
 
-        self._show_browser = QCheckBox("Show directory browser")
-        self._show_browser.setChecked(bool(state.get("show_directory_browser", True)))
-        self._show_browser.toggled.connect(self._on_show_browser)
-
         self._panel_list = QListWidget()
         self._clear_btn = QPushButton("Clear all panels")
         self._clear_btn.clicked.connect(self.clear_panels.emit)
@@ -100,8 +96,7 @@ class SettingsPanel(QWidget):
 
         panels_box = QGroupBox("Panels")
         panels_layout = QVBoxLayout(panels_box)
-        panels_layout.addWidget(self._show_browser)
-        panels_layout.addWidget(QLabel("Selected panels"))
+        panels_layout.addWidget(QLabel("Selected panels  ·  ` or Directories to browse"))
         panels_layout.addWidget(self._panel_list)
         panels_layout.addWidget(self._clear_btn)
         panels_layout.addWidget(self._recursive)
@@ -157,9 +152,6 @@ class SettingsPanel(QWidget):
     def _set(self, key: str, value) -> None:
         self._state[key] = value
         self.settings_changed.emit()
-
-    def _on_show_browser(self, checked: bool) -> None:
-        self._set("show_directory_browser", checked)
 
     def _on_sync(self, checked: bool) -> None:
         self._match.setEnabled(checked)

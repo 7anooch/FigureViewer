@@ -17,8 +17,13 @@ class NavControls(QWidget):
         super().__init__(parent)
         self._prev_btn = QPushButton("◀")
         self._next_btn = QPushButton("▶")
+        # Keep figure-viewport keyboard focus when clicking nav (←/→ are viewport-scoped).
+        self._prev_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._next_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._counter = QLabel("0 / 0")
         self._slider = QSlider(Qt.Orientation.Horizontal)
+        # ClickFocus: dragging still works; arrows are handled as figure nav (window shortcuts).
+        self._slider.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
         self._slider.setEnabled(False)
         self._total = 0
         self._block_signals = False

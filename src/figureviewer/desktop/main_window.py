@@ -3,16 +3,22 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
+    QAbstractSpinBox,
+    QApplication,
+    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QScrollArea,
     QSplitter,
     QStatusBar,
+    QTextEdit,
     QToolBar,
     QVBoxLayout,
     QWidget,
@@ -20,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 from figuregallery.platform import reveal_in_file_manager
 from figuregallery.ui.nav_controls import NavControls
-from figureviewer.desktop.column_browser import ColumnBrowser
+from figureviewer.desktop.directory_navigator import DirectoryNavigator
 from figureviewer.desktop.export_panel import ExportPanel
 from figureviewer.desktop.metadata_panel import MetadataPanel
 from figureviewer.desktop.settings_panel import SettingsPanel
@@ -45,7 +51,7 @@ class MainWindow(QMainWindow):
 
         self._settings = SettingsPanel(self._state)
         self._export = ExportPanel(self._state)
-        self._browser = ColumnBrowser(self._state)
+        self._navigator = DirectoryNavigator(self._state)
         self._viewport = MultiPanelViewport()
         self._nav = NavControls()
         self._current_label = QLabel()
@@ -65,18 +71,26 @@ class MainWindow(QMainWindow):
         scroll.setWidget(inner)
         side_layout.addWidget(scroll)
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.addWidget(self._browser)
-        right_layout.addWidget(self._viewport, stretch=1)
-        right_layout.addWidget(self._nav)
-        right_layout.addWidget(self._current_label)
+        figure_col = QWidget()
+        figure_layout = QVBoxLayout(figure_col)
+        figure_layout.setContentsMargins(0, 0, 0, 0)
+        figure_layout.addWidget(self._viewport, stretch=1)
+        figure_layout.addWidget(self._nav)
+        figure_layout.addWidget(self._current_label)
         self._zoom_hint = QLabel()
         self._zoom_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._zoom_hint.setStyleSheet("color: #666; font-size: 12px;")
         self._zoom_hint.hide()
-        right_layout.addWidget(self._zoom_hint)
-        right_layout.addWidget(self._metadata)
+        figure_layout.addWidget(self._zoom_hint)
+        figure_layout.addWidget(self._metadata)
+
+        # Slide-in navigator sits beside figures (hidden by default — no vertical tax).
+        right = QWidget()
+        right_row = QHBoxLayout(right)
+        right_row.setContentsMargins(0, 0, 0, 0)
+        right_row.setSpacing(4)
+        right_row.addWidget(self._navigator)
+        right_row.addWidget(figure_col, stretch=1)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(sidebar)
@@ -92,6 +106,13 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("Main")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+
+        dirs_action = QAction("Directories", self)
+        dirs_action.setShortcut(QKeySequence("Ctrl+D"))
+        dirs_action.setToolTip("Show or hide the directory navigator (also `)")
+        dirs_action.triggered.connect(self._toggle_navigator)
+        toolbar.addAction(dirs_action)
+
         reveal_label = "Reveal in Finder" if sys.platform == "darwin" else "Show in folder"
         reveal_action = QAction(reveal_label, self)
         reveal_action.setShortcut(QKeySequence("Ctrl+E"))
@@ -104,7 +125,8 @@ class MainWindow(QMainWindow):
         self._settings.go_last.connect(self._go_last)
         self._settings.remove_panel.connect(self._remove_panel)
         self._settings.clear_panels.connect(self._clear_panels)
-        self._browser.panels_changed.connect(self._on_panels_changed)
+        self._navigator.panels_changed.connect(self._on_panels_changed)
+        self._navigator.closed.connect(self._viewport.focus_display)
         self._export.export_dir_changed.connect(self._persist_sticky_prefs)
         self._viewport.local_index_changed.connect(self._on_local_index)
         self._viewport.zoom_hint_changed.connect(self._on_zoom_hint)
@@ -118,28 +140,81 @@ class MainWindow(QMainWindow):
         self._refresh_view()
 
     def _build_shortcuts(self) -> None:
-        # Figure nav / zoom only when the viewport (or a child) has focus — so ←/→
-        # stay available to the column browser and text fields.
-        def _figure_shortcut(key: QKeySequence | str | Qt.Key, slot) -> None:
-            sc = QShortcut(QKeySequence(key), self._viewport)
-            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        # Window-level figure nav — stays active even if focus drifts to the nav
+        # slider / chrome. Disabled while typing or while the directory navigator
+        # has focus (so ←/→/Space keep their navigator meanings).
+        self._figure_nav_shortcuts: list[QShortcut] = []
+
+        def _nav_shortcut(key: QKeySequence | str | Qt.Key, slot) -> None:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            sc.activated.connect(slot)
+            self._figure_nav_shortcuts.append(sc)
+
+        def _zoom_shortcut(key: QKeySequence | str | Qt.Key, slot) -> None:
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ShortcutContext.WindowShortcut)
             sc.activated.connect(slot)
 
-        _figure_shortcut(Qt.Key.Key_Left, self._go_prev)
-        _figure_shortcut(Qt.Key.Key_Right, self._go_next)
-        _figure_shortcut(Qt.Key.Key_Space, self._go_next)
-        _figure_shortcut(Qt.Key.Key_Home, self._go_first)
-        _figure_shortcut(Qt.Key.Key_End, self._go_last)
-        _figure_shortcut("Ctrl+Left", self._go_first)
-        _figure_shortcut("Ctrl+Right", self._go_last)
-        _figure_shortcut("Ctrl+=", lambda: self._viewport.zoom_by(1.25))
-        _figure_shortcut("Ctrl++", lambda: self._viewport.zoom_by(1.25))
-        _figure_shortcut("Ctrl+-", lambda: self._viewport.zoom_by(1.0 / 1.25))
-        _figure_shortcut("Ctrl+0", self._viewport.reset_zoom)
+        _nav_shortcut(Qt.Key.Key_Left, self._go_prev)
+        _nav_shortcut(Qt.Key.Key_Right, self._go_next)
+        _nav_shortcut(Qt.Key.Key_Space, self._go_next)
+        _nav_shortcut(Qt.Key.Key_Home, self._go_first)
+        _nav_shortcut(Qt.Key.Key_End, self._go_last)
+        _nav_shortcut("Ctrl+Left", self._go_first)
+        _nav_shortcut("Ctrl+Right", self._go_last)
+        _zoom_shortcut("Ctrl+=", lambda: self._viewport.zoom_by(1.25))
+        _zoom_shortcut("Ctrl++", lambda: self._viewport.zoom_by(1.25))
+        _zoom_shortcut("Ctrl+-", lambda: self._viewport.zoom_by(1.0 / 1.25))
+        _zoom_shortcut("Ctrl+0", self._viewport.reset_zoom)
 
         toggle = QShortcut(QKeySequence(Qt.Key.Key_QuoteLeft), self)
         toggle.setContext(Qt.ShortcutContext.WindowShortcut)
         toggle.activated.connect(self._toggle_panel_focus)
+
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._sync_figure_nav_shortcuts)
+        self._sync_figure_nav_shortcuts()
+
+    @staticmethod
+    def _is_text_entry(widget: QWidget | None) -> bool:
+        w = widget
+        while w is not None:
+            if isinstance(
+                w, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox, QComboBox)
+            ):
+                return True
+            w = w.parentWidget()
+        return False
+
+    def _sync_figure_nav_shortcuts(self, *args) -> None:  # noqa: ANN002
+        del args
+        sync = bool(self._state.get("sync_mode", True))
+        nav_focus = self._navigator.is_open() and self._navigator.has_panel_focus()
+        text = self._is_text_entry(QApplication.focusWidget())
+        enabled = sync and not nav_focus and not text
+        for sc in self._figure_nav_shortcuts:
+            sc.setEnabled(enabled)
+
+    def _toggle_navigator(self) -> None:
+        if self._navigator.is_open():
+            self._navigator.close_picker()
+            self._viewport.focus_display()
+        else:
+            root = Path(self._state.get("browse_root") or Path.home())
+            self._navigator.open_for(root)
+
+    def _toggle_panel_focus(self) -> None:
+        # ` cycles: figures ↔ open/focus directory navigator (Gallery root-picker pattern).
+        if self._navigator.is_open() and self._navigator.has_panel_focus():
+            self._navigator.close_picker()
+            self._viewport.focus_display()
+        elif self._navigator.is_open():
+            self._navigator.focus_list()
+        else:
+            root = Path(self._state.get("browse_root") or Path.home())
+            self._navigator.open_for(root)
 
     def _persist_sticky_prefs(self) -> None:
         save_sticky_prefs(
@@ -175,16 +250,7 @@ class MainWindow(QMainWindow):
             self._zoom_hint.clear()
             self._zoom_hint.hide()
 
-    def _toggle_panel_focus(self) -> None:
-        if self._browser.isVisible() and self._browser.has_panel_focus():
-            self._viewport.focus_display()
-        elif self._browser.isVisible():
-            self._browser.focus_list()
-        else:
-            self._viewport.focus_display()
-
     def _on_settings_changed(self) -> None:
-        self._browser.setVisible(bool(self._state.get("show_directory_browser", True)))
         self._persist_sticky_prefs()
         self._refresh_view()
 
@@ -195,14 +261,20 @@ class MainWindow(QMainWindow):
         self._refresh_view()
 
     def _remove_panel(self, path: str) -> None:
-        dirs = [d for d in self._state.get("panel_directories", []) if str(Path(d).resolve()) != str(Path(path).resolve())]
+        dirs = [
+            d
+            for d in self._state.get("panel_directories", [])
+            if str(Path(d).resolve()) != str(Path(path).resolve())
+        ]
         self._state["panel_directories"] = dirs
-        self._browser.refresh()
+        if self._navigator.is_open():
+            self._navigator.open_for(Path(self._state.get("browse_root") or Path.home()))
         self._on_panels_changed()
 
     def _clear_panels(self) -> None:
         self._state["panel_directories"] = []
-        self._browser.refresh()
+        if self._navigator.is_open():
+            self._navigator.open_for(Path(self._state.get("browse_root") or Path.home()))
         self._on_panels_changed()
 
     def _on_local_index(self, key: str, value: int) -> None:
@@ -217,6 +289,9 @@ class MainWindow(QMainWindow):
             panel_count=len(self._state.get("panel_directories", []) or [])
         )
         self._refresh_view()
+        # Defer until after deleteLater cleanup from show_snapshot.
+        QTimer.singleShot(0, self._viewport.focus_display)
+        self._sync_figure_nav_shortcuts()
 
     def _go_prev(self) -> None:
         self._set_index(max(0, int(self._state.get("current_index", 0)) - 1))
@@ -316,3 +391,4 @@ class MainWindow(QMainWindow):
                 + (f" (+{len(missing) - 1} more)" if len(missing) > 1 else ""),
                 8000,
             )
+        self._sync_figure_nav_shortcuts()

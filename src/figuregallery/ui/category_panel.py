@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
@@ -12,18 +14,37 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from figuregallery.models import Category
+from figuregallery.directory_tree import filter_by_directory_exclusions
+from figuregallery.models import Category, FigureRef
+
+
+def visible_category_refs(category: Category, excluded: set[Path]) -> list[FigureRef]:
+    refs = category.displayable_refs
+    if not excluded:
+        return refs
+    return filter_by_directory_exclusions(refs, excluded)
+
+
+def category_list_label(category: Category, excluded: set[Path]) -> str:
+    """Sidebar label: ``key (n)`` or ``key (visible/total)`` when dirs are filtered."""
+    visible = len(visible_category_refs(category, excluded))
+    total = category.count
+    if excluded and visible != total:
+        return f"{category.key} ({visible}/{total})"
+    return f"{category.key} ({visible})"
 
 
 class CategoryPanel(QWidget):
     selection_changed = pyqtSignal()
     focus_figure_requested = pyqtSignal()
+    open_root_picker_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._categories: dict[str, Category] = {}
         self._selected: set[str] = set()
         self._filter_text = ""
+        self._excluded_dirs: set[Path] = set()
 
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter categories…")
@@ -49,6 +70,10 @@ class CategoryPanel(QWidget):
         focus_figure = QShortcut(QKeySequence(Qt.Key.Key_Right), self._list)
         focus_figure.setContext(Qt.ShortcutContext.WidgetShortcut)
         focus_figure.activated.connect(self.focus_figure_requested.emit)
+        # ← opens the slide-in root picker (sibling / recent roots).
+        open_roots = QShortcut(QKeySequence(Qt.Key.Key_Left), self._list)
+        open_roots.setContext(Qt.ShortcutContext.WidgetShortcut)
+        open_roots.activated.connect(self.open_root_picker_requested.emit)
 
         self._summary = QLabel("No categories")
         self._summary.setStyleSheet("color: #666; font-size: 12px;")
@@ -73,12 +98,21 @@ class CategoryPanel(QWidget):
             self._selected = {k for k in self._selected if k in categories and categories[k].is_selectable}
         self._rebuild_list()
 
+    def set_excluded_directories(self, excluded: set[Path]) -> None:
+        """Update labels/summary for Directories… exclusions (does not change selection)."""
+        new_excluded = set(excluded)
+        if new_excluded == self._excluded_dirs:
+            return
+        self._excluded_dirs = new_excluded
+        self._rebuild_list()
+
     def selected_keys(self) -> set[str]:
         return set(self._selected)
 
     def clear(self) -> None:
         self._categories = {}
         self._selected = set()
+        self._excluded_dirs = set()
         self._list.clear()
         self._summary.setText("No categories")
 
@@ -94,6 +128,12 @@ class CategoryPanel(QWidget):
     def has_panel_focus(self) -> bool:
         focus = QApplication.focusWidget()
         return focus is self._list or focus is self._filter
+
+    def _visible_refs(self, category: Category) -> list[FigureRef]:
+        return visible_category_refs(category, self._excluded_dirs)
+
+    def _category_label(self, category: Category) -> str:
+        return category_list_label(category, self._excluded_dirs)
 
     def _on_filter_changed(self, text: str) -> None:
         self._filter_text = text.strip().lower()
@@ -119,24 +159,33 @@ class CategoryPanel(QWidget):
                 continue
             visible += 1
             category = self._categories[key]
-            item = QListWidgetItem(category.label())
+            item = QListWidgetItem(self._category_label(category))
             item.setData(Qt.ItemDataRole.UserRole, key)
-            item.setFlags(
+            flags = (
                 Qt.ItemFlag.ItemIsEnabled
                 | Qt.ItemFlag.ItemIsSelectable
                 | Qt.ItemFlag.ItemIsUserCheckable
             )
-            item.setCheckState(
-                Qt.CheckState.Checked if key in self._selected else Qt.CheckState.Unchecked
-            )
+            if not category.is_selectable:
+                flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
+            item.setFlags(flags)
+            if category.is_selectable:
+                item.setCheckState(
+                    Qt.CheckState.Checked if key in self._selected else Qt.CheckState.Unchecked
+                )
             self._list.addItem(item)
             if preserve_key is not None and key == preserve_key:
                 restore_row = self._list.count() - 1
 
         selected_count = len(self._selected)
-        figure_count = sum(len(self._categories[k].displayable_refs) for k in self._selected)
+        figure_count = sum(len(self._visible_refs(self._categories[k])) for k in self._selected)
         if not self._categories:
             self._summary.setText("No categories")
+        elif self._excluded_dirs:
+            self._summary.setText(
+                f"{visible} categories · {selected_count} selected · {figure_count} figures "
+                f"(dirs filtered)"
+            )
         else:
             self._summary.setText(
                 f"{visible} categories · {selected_count} selected · {figure_count} figures"
@@ -164,7 +213,7 @@ class CategoryPanel(QWidget):
             if not isinstance(key, str):
                 continue
             category = self._categories.get(key)
-            if category is not None and category.is_selectable:
+            if category is not None and category.is_selectable and self._visible_refs(category):
                 keys.add(key)
         return keys
 

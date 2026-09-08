@@ -221,7 +221,7 @@ How macOS `.app` bundles work (thin launcher, bootstrap, frozen/portable): [`doc
 - Scan a root directory; categories appear in a sidebar with counts.
 - Select one or more categories and scroll through all matching figures.
 - Path shown relative to root; **Open enclosing folder** (`Cmd+E` / `Ctrl+E`).
-- **Export PDF…** (`Cmd+S` / `Ctrl+S`) writes the current playlist as one figure per page with a path title.
+- **Export PDF…** (`Cmd+P` / `Ctrl+P`) writes the current playlist as one figure per page with a path title.
 - Toggle **Stem** vs **Filename** grouping; choose sort order **Category → Path** or **Path → Category**.
 - PDFs are rasterized (page 1) at a configurable DPI, with optional whitespace trim.
 

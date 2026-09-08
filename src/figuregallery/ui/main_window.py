@@ -39,6 +39,7 @@ from figuregallery.playlist import (
 )
 from figuregallery.directory_tree import filter_by_directory_exclusions
 from figuregallery.export import export_playlist_pdf
+from figuregallery.settings import save_last_root
 from figuregallery.shortcuts import empty_state_html, shortcuts_help_text
 from figuregallery.ui.category_panel import CategoryPanel
 from figuregallery.ui.directory_filter_dialog import DirectoryFilterDialog
@@ -46,6 +47,7 @@ from figuregallery.ui.export_dialog import ExportPdfDialog
 from figuregallery.ui.loader import FigureLoader
 from figuregallery.ui.nav_controls import NavControls
 from figuregallery.ui.path_bar import PathBar
+from figuregallery.ui.root_picker import RootPicker
 from figuregallery.ui.viewport import FigureViewport
 
 DEFAULT_PDF_DPI = 200
@@ -141,7 +143,7 @@ class MainWindow(QMainWindow):
         self._export_action.triggered.connect(self._export_pdf)
         self._export_action.setEnabled(False)
         self._export_action.setToolTip("Export the current playlist as a multi-page PDF.")
-        self._export_action.setShortcut(QKeySequence(QKeySequence.StandardKey.Save))
+        self._export_action.setShortcut(QKeySequence("Ctrl+P"))
         toolbar.addAction(self._export_action)
 
         toolbar.addSeparator()
@@ -153,7 +155,14 @@ class MainWindow(QMainWindow):
         if self._sort_mode == SortMode.PATH_THEN_CATEGORY:
             self._sort_combo.setCurrentIndex(1)
         self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        self._sort_combo.setToolTip("Playlist sort order (S to cycle).")
         toolbar.addWidget(self._sort_combo)
+
+        cycle_sort = QAction("Cycle sort", self)
+        cycle_sort.setShortcut(QKeySequence("S"))
+        cycle_sort.setShortcutContext(Qt.ShortcutContext.WindowShortcut)
+        cycle_sort.triggered.connect(self._cycle_sort_mode)
+        self.addAction(cycle_sort)
 
         toolbar.addSeparator()
 
@@ -196,8 +205,13 @@ class MainWindow(QMainWindow):
         rescan_action.setShortcut(QKeySequence("Ctrl+R"))
 
     def _build_ui(self) -> None:
+        self._root_picker = RootPicker()
+        self._root_picker.root_chosen.connect(self._on_root_chosen)
+        self._root_picker.closed.connect(self._on_root_picker_closed)
+
         self._category_panel = CategoryPanel()
         self._category_panel.selection_changed.connect(self._on_selection_changed)
+        self._category_panel.open_root_picker_requested.connect(self._open_root_picker)
 
         self._path_bar = PathBar()
         self._path_bar.segment_clicked.connect(self._on_path_segment_clicked)
@@ -232,6 +246,7 @@ class MainWindow(QMainWindow):
         right_widget.setLayout(right)
 
         central = QHBoxLayout()
+        central.addWidget(self._root_picker)
         central.addWidget(self._category_panel)
         central.addWidget(right_widget, stretch=1)
 
@@ -259,16 +274,57 @@ class MainWindow(QMainWindow):
         _figure_shortcut("Ctrl++", lambda: self._viewport.zoom_by(1.25))
         _figure_shortcut("Ctrl+-", lambda: self._viewport.zoom_by(1.0 / 1.25))
         _figure_shortcut("Ctrl+0", self._viewport.reset_zoom)
+        _figure_shortcut(QKeySequence.StandardKey.Copy, self._copy_current_figure)
 
         toggle = QShortcut(QKeySequence(Qt.Key.Key_QuoteLeft), self)
         toggle.setContext(Qt.ShortcutContext.WindowShortcut)
-        toggle.activated.connect(self._toggle_panel_focus)
+        toggle.activated.connect(self._cycle_panel_focus)
 
-    def _toggle_panel_focus(self) -> None:
-        if self._category_panel.has_panel_focus():
+    def _cycle_panel_focus(self) -> None:
+        """Cycle focus: figures → categories → root picker → figures."""
+        if self._root_picker.is_open() and self._root_picker.has_panel_focus():
+            self._root_picker.close_picker(notify=False)
             self._viewport.focus_display()
+            return
+        if self._category_panel.has_panel_focus():
+            if self._root_picker.is_open():
+                self._root_picker.focus_list()
+            else:
+                self._open_root_picker()
+            return
+        # Figures (or other chrome) → categories
+        self._category_panel.focus_list()
+
+    def _copy_current_figure(self) -> None:
+        if self._viewport.copy_to_clipboard():
+            name = (
+                self._playlist[self._current_index].absolute_path.name
+                if self._playlist
+                else "figure"
+            )
+            self._status.showMessage(f"Copied {name} to clipboard", 2500)
         else:
+            self._status.showMessage("No figure file to copy", 2500)
+
+    def _open_root_picker(self) -> None:
+        root = self._scan_index.root if self._scan_index is not None else None
+        self._root_picker.open_for(root)
+
+    def _on_root_chosen(self, root: Path) -> None:
+        previous = self._scan_index.root if self._scan_index is not None else None
+        try:
+            resolved = root.expanduser().resolve()
+        except OSError:
+            self._root_picker.open_for(previous)
+            return
+        self._scan_root(resolved)
+        if self._scan_index is not None and self._scan_index.root == resolved:
             self._category_panel.focus_list()
+        else:
+            self._root_picker.open_for(previous)
+
+    def _on_root_picker_closed(self) -> None:
+        self._category_panel.focus_list()
 
     def _build_status_bar(self) -> None:
         self._status = QStatusBar()
@@ -308,10 +364,12 @@ class MainWindow(QMainWindow):
 
         elapsed = time.perf_counter() - started
         self._scan_index = index
+        save_last_root(index.root)
         self._path_filter = None
         self._excluded_dirs = set()
         self._clear_this_folder_only()
         self._categories = group_index(index, self._group_mode)
+        self._category_panel.set_excluded_directories(self._excluded_dirs)
         self._category_panel.set_categories(self._categories)
         self._root_label.setText(f"Root: {index.root}")
         pdf_count = sum(1 for r in index.refs if r.absolute_path.suffix.lower() == ".pdf")
@@ -367,9 +425,16 @@ class MainWindow(QMainWindow):
         self._sort_mode = mode
         self._rebuild_playlist(reset_index=False)
 
+    def _cycle_sort_mode(self) -> None:
+        if self._sort_combo.count() == 0:
+            return
+        next_index = (self._sort_combo.currentIndex() + 1) % self._sort_combo.count()
+        self._sort_combo.setCurrentIndex(next_index)
+        self._status.showMessage(f"Sort: {self._sort_combo.currentText()}", 3000)
+
     def _on_selection_changed(self) -> None:
+        # Keep directory exclusions across category toggles; only clear on root change.
         self._path_filter = None
-        self._excluded_dirs = set()
         self._clear_this_folder_only()
         self._rebuild_playlist(reset_index=True)
 
@@ -474,7 +539,7 @@ class MainWindow(QMainWindow):
             ref.absolute_path, pdf_dpi=self._pdf_dpi, trim=self._trim_whitespace
         )
         if cached is not None:
-            self._viewport.set_image(cached)
+            self._viewport.set_image(cached, source_path=ref.absolute_path)
             self._prefetch_neighbors()
             return
 
@@ -495,7 +560,7 @@ class MainWindow(QMainWindow):
             # Stale load; still cached for later, then resume prefetch.
             self._prefetch_neighbors()
             return
-        self._viewport.set_image(image)
+        self._viewport.set_image(image, source_path=current.absolute_path)
         self._prefetch_neighbors()
 
     def _on_image_failed(self, path_str: str, message: str) -> None:
@@ -634,6 +699,7 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         self._excluded_dirs = dialog.excluded_directories()
+        self._category_panel.set_excluded_directories(self._excluded_dirs)
         self._apply_playlist_filters(reset_index=False)
 
     def _export_pdf(self) -> None:
