@@ -145,3 +145,22 @@ def save_sticky_prefs(**updates: Any) -> None:
             changed = True
     if changed:
         _save_settings(data)
+
+
+def load_desktop_mode() -> str | None:
+    """Last unified-desktop mode: ``compare`` or ``browse``."""
+    value = _load_settings().get("desktop_mode")
+    if isinstance(value, str) and value.strip():
+        return value.strip().lower()
+    return None
+
+
+def save_desktop_mode(mode: str) -> None:
+    key = str(mode).strip().lower()
+    if key not in {"compare", "browse"}:
+        return
+    data = _load_settings()
+    if data.get("desktop_mode") == key:
+        return
+    data["desktop_mode"] = key
+    _save_settings(data)

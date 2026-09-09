@@ -20,6 +20,8 @@ def _png(path: Path) -> None:
 def test_parse_launch_args_desktop() -> None:
     args = parse_launch_args(["--desktop"])
     assert args.desktop is True
+    assert args.mode is None
+    assert args.root is None
     assert args.streamlit_args == []
 
     args = parse_launch_args(["-d", "--server.port", "8502"])
@@ -29,6 +31,20 @@ def test_parse_launch_args_desktop() -> None:
     args = parse_launch_args(["--server.headless", "true"])
     assert args.desktop is False
     assert args.streamlit_args == ["--server.headless", "true"]
+
+    args = parse_launch_args(["--mode", "browse", "/tmp"])
+    assert args.desktop is True
+    assert args.mode == "browse"
+    assert args.root == Path("/tmp")
+
+    args = parse_launch_args(["--desktop", "--root", "/tmp"])
+    assert args.desktop is True
+    assert args.root == Path("/tmp")
+
+    args = parse_launch_args(["some_streamlit_arg"])
+    assert args.desktop is False
+    assert args.root is None
+    assert args.streamlit_args == ["some_streamlit_arg"]
 
 
 def test_parse_panels_and_labels(tmp_path: Path) -> None:
@@ -440,3 +456,58 @@ def test_sticky_prefs_roundtrip(tmp_path: Path, monkeypatch) -> None:
     assert prefs["export_pdf_dpi"] == 350
     assert prefs["export_output_dir_user_set"] is True
     assert Path(prefs["export_output_dir"]) == out.resolve()
+
+
+def test_desktop_mode_prefs_roundtrip(tmp_path: Path, monkeypatch) -> None:
+    import figureviewer.settings as settings
+
+    monkeypatch.setattr(settings, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings, "_CONFIG_FILE", tmp_path / "settings.json")
+    assert settings.load_desktop_mode() is None
+    settings.save_desktop_mode("browse")
+    assert settings.load_desktop_mode() == "browse"
+    settings.save_desktop_mode("compare")
+    assert settings.load_desktop_mode() == "compare"
+    settings.save_desktop_mode("nope")
+    assert settings.load_desktop_mode() == "compare"
+
+
+def test_mode_controller_switches_compare_browse(tmp_path: Path, monkeypatch) -> None:
+    import figureviewer.settings as settings
+    from figuregallery.platform import configure_qt_plugins
+    from figureviewer.desktop.mode_shell import ModeController
+    from figureviewer.desktop.modes import AppMode
+
+    # Native macOS menu bar can abort under headless/CI; keep Qt offscreen.
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setattr(settings, "_CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(settings, "_CONFIG_FILE", tmp_path / "settings.json")
+    configure_qt_plugins()
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    controller = ModeController(app, initial_mode=AppMode.COMPARE)
+    assert controller.mode is AppMode.COMPARE
+    assert controller.window is not None
+    assert "Compare" in controller.window.windowTitle()
+    assert settings.load_desktop_mode() == "compare"
+
+    controller.show(AppMode.BROWSE)
+    app.processEvents()
+    assert controller.mode is AppMode.BROWSE
+    assert controller.window is not None
+    assert "Browse" in controller.window.windowTitle()
+    assert settings.load_desktop_mode() == "browse"
+
+    # Mode menu / toolbar expose a single switch-to-other-mode action.
+    mode_menu = next(
+        (a.menu() for a in controller.window.menuBar().actions() if a.text() == "Mode"),
+        None,
+    )
+    assert mode_menu is not None
+    switch_labels = [a.text() for a in mode_menu.actions()]
+    assert switch_labels == ["Compare"]
+
+    controller.window.close()
+    controller.window.deleteLater()
+    app.processEvents()

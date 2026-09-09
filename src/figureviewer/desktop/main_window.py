@@ -159,8 +159,6 @@ class MainWindow(QMainWindow):
         _nav_shortcut(Qt.Key.Key_Left, self._go_prev)
         _nav_shortcut(Qt.Key.Key_Right, self._go_next)
         _nav_shortcut(Qt.Key.Key_Space, self._go_next)
-        _nav_shortcut(Qt.Key.Key_Home, self._go_first)
-        _nav_shortcut(Qt.Key.Key_End, self._go_last)
         _nav_shortcut("Ctrl+Left", self._go_first)
         _nav_shortcut("Ctrl+Right", self._go_last)
         _zoom_shortcut("Ctrl+=", lambda: self._viewport.zoom_by(1.25))

@@ -60,7 +60,7 @@ Gallery invested here for “leave one figure open as reference / flip quickly�
 
 - ~~Persist a small sticky set (display mode, DPI, last export dir) beyond browse root~~ **done**  
 - ~~Reveal in Finder; clearer Open-root errors~~ **done**  
-- When merging with Gallery: one app name (**FigureViewer**), modes **Compare** / **Browse**; one `.app` installer  
+- ~~When merging with Gallery: one app name (**FigureViewer**), modes **Compare** / **Browse**; one `.app` installer~~ **done** (`ModeController`, `figureviewer --desktop`, `Figure Viewer.app`)  
 
 ---
 
@@ -72,7 +72,7 @@ Gallery invested here for “leave one figure open as reference / flip quickly�
 4. ~~**Zoom (all panels)** — shared pinch / ⌘-scroll / ⌘0~~ **done**  
 5. ~~**Prefetch / pacing** — snappy multi-panel flipping~~ **done**  
 6. ~~**Metadata tabs + export error surfacing**~~ **done** (also multiline paths + missing-dir warnings)  
-7. **Merge shell** with Gallery Browse mode + single macOS `.app`  
+7. ~~**Merge shell** with Gallery Browse mode + single macOS `.app`~~ **done**  
 8. ~~**Status bar + empty-state shortcut sheet** · sticky prefs · Reveal in Finder~~ **done** · remaining: `pdf_mode` decision  
 
 ---

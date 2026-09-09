@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Bootstrap Figure Gallery on this Mac: conda env + editable install + thin .app.
+# Bootstrap Figure Viewer on this Mac: conda env + editable install + thin .app.
 #
 # Prerequisites: conda (Miniconda / Anaconda / Mambaforge) on PATH, or
 #                installable via the usual conda.sh location.
@@ -113,14 +113,16 @@ fi
 echo "==> Editable install of this repo into '${ENV_NAME}'"
 conda run -n "${ENV_NAME}" python -m pip install -e "${ROOT}"
 
-echo "==> Building thin Figure Gallery.app"
+echo "==> Building thin Figure Viewer.app"
 "${ROOT}/packaging/macos/install_app.sh" --env "${ENV_NAME}" "${FORWARD_ARGS[@]+"${FORWARD_ARGS[@]}"}"
 
 echo
 echo "Done. CLI (optional):"
 echo "  conda activate ${ENV_NAME}"
-echo "  figuregallery"
+echo "  figureviewer --desktop"
+echo "  figuregallery   # Browse-mode alias"
 echo
+echo "Open: open ~/Applications/Figure\\ Viewer.app"
 echo "After pulling new commits, either re-run this script or:"
 echo "  conda activate ${ENV_NAME} && pip install -e . && ./packaging/macos/install_app.sh"
 echo "Use --update-env when environment.yaml dependencies change."

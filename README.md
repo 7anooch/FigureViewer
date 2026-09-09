@@ -51,7 +51,7 @@ If a previous pip extra installed PyPI Qt (`PyQt6-Qt6`) and macOS fails with `Co
 - `pyyaml` — metadata sidecar files
 - `pymupdf` — rasterize PDF figures for sharp side-by-side comparison
 - `pillow` — image loading
-- `pyqt6` — Figure Gallery GUI
+- `pyqt6` — desktop GUI (Compare + Browse)
 
 Arrow-key navigation is built in and only applies outside the sidebar.
 
@@ -62,7 +62,8 @@ With `figviewer` activated:
 ```bash
 conda activate figviewer
 figureviewer                 # Streamlit (default)
-figureviewer --desktop       # native PyQt6 app
+figureviewer --desktop       # native PyQt6 app (Compare + Browse)
+figureviewer --mode browse
 python -m figureviewer --desktop
 ```
 
@@ -171,17 +172,25 @@ The app can read and write descriptions plus optional fields:
 - tags
 - notes
 
-## Figure Gallery (sister app)
+## Desktop app (Compare + Browse)
 
-Native PyQt6 app for browsing figures **across a directory tree**, grouped by filename or stem.
+Native PyQt6 app with two modes in one window:
 
-Use when you have **many folders with a few figures each** (the inverse of FigureViewer's use case).
+| Mode | Switch via | Use when |
+|------|------------|----------|
+| **Compare** | toolbar **Browse** / `Cmd+2` | Few folders × many figures — side-by-side sync |
+| **Browse** | toolbar **Compare** / `Cmd+1` | Many folders × few figures — gallery by filename/stem |
 
 ```bash
 conda activate figviewer
-figuregallery
-figuregallery /path/to/experiment/tree
+figureviewer --desktop              # last mode (default Compare)
+figureviewer --mode compare
+figureviewer --mode browse /path/to/tree
+figuregallery                       # alias → Browse mode
+figuregallery /path/to/tree
 ```
+
+Switch modes anytime from the toolbar (one button for the other mode) or the **Mode** menu.
 
 ### macOS app (Spotlight / Dock)
 
@@ -191,7 +200,7 @@ figuregallery /path/to/experiment/tree
 git clone <this-repo>
 cd FigureViewer
 ./packaging/macos/bootstrap_install.sh
-open ~/Applications/Figure\ Gallery.app
+open ~/Applications/Figure\ Viewer.app
 ```
 
 Refresh deps from `environment.yaml` when they change: `./packaging/macos/bootstrap_install.sh --update-env`.
@@ -202,7 +211,7 @@ Refresh deps from `environment.yaml` when they change: `./packaging/macos/bootst
 conda activate figviewer
 pip install -e .          # once / after packaging changes
 ./packaging/macos/install_app.sh
-open ~/Applications/Figure\ Gallery.app
+open ~/Applications/Figure\ Viewer.app
 ```
 
 Optional custom logo (1024×1024 PNG):
@@ -217,6 +226,8 @@ Logo idea prompts: [`packaging/macos/LOGO_PROMPTS.md`](packaging/macos/LOGO_PROM
 How macOS `.app` bundles work (thin launcher, bootstrap, frozen/portable): [`docs/macos-app-packaging.md`](docs/macos-app-packaging.md).
 
 (PyQt6 comes from conda-forge via `environment.yaml`.)
+
+Browse mode:
 
 - Scan a root directory; categories appear in a sidebar with counts.
 - Select one or more categories and scroll through all matching figures.

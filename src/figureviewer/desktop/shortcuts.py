@@ -30,7 +30,6 @@ def shortcut_entries() -> list[tuple[str, str]]:
         ("← / →", "Previous / next figure"),
         ("Space", "Next figure"),
         (f"{mod}+← / {mod}+→", "First / last figure"),
-        ("Home / End", "First / last figure"),
         ("↑ / ↓", "Move in directory list (when navigator open)"),
         ("← / →", "Up / into folder (when navigator open)"),
         ("Enter / Space", "Add / remove folder as panel (navigator)"),

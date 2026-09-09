@@ -5,17 +5,17 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Figure Gallery</string>
+	<string>Figure Viewer</string>
 	<key>CFBundleExecutable</key>
-	<string>FigureGallery</string>
+	<string>FigureViewer</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>edu.ucsb.figuregallery</string>
+	<string>edu.ucsb.figureviewer</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Figure Gallery</string>
+	<string>Figure Viewer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

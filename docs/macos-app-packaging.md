@@ -1,6 +1,6 @@
 # Packaging a Python GUI as a macOS app
 
-An educational overview of what it means to turn something like **Figure Gallery** into a double‑clickable Mac application (Spotlight, Dock, custom icon)—and how that differs from running `figuregallery` in a terminal.
+An educational overview of what it means to turn **Figure Viewer** (Compare + Browse) into a double‑clickable Mac application (Spotlight, Dock, custom icon)—and how that differs from running `figureviewer --desktop` in a terminal.
 
 This repo currently uses the **thin launcher** approach. A **frozen / portable** app is the higher‑effort alternative if you ever want to hand someone a `.app` without asking them to install conda.
 
@@ -11,11 +11,11 @@ This repo currently uses the **thin launcher** approach. A **frozen / portable**
 On macOS, “an app” is not a single executable file. It is a **bundle**: a directory whose name ends in `.app` and that follows a conventional layout. Finder, Spotlight, and the Dock treat that folder as one icon.
 
 ```text
-Figure Gallery.app/
+Figure Viewer.app/
 └── Contents/
     ├── Info.plist          # metadata: name, bundle id, icon, which binary to run
     ├── MacOS/
-    │   └── FigureGallery   # the program Launch Services actually executes
+    │   └── FigureViewer    # the program Launch Services actually executes
     └── Resources/
         └── AppIcon.icns    # Dock / Finder / Spotlight icon
 ```
@@ -33,7 +33,7 @@ That is the whole contract. Everything else—Python, PyQt, conda, PyInstaller�
 | Key | Role |
 |-----|------|
 | `CFBundleDisplayName` | Name under the icon / in Spotlight |
-| `CFBundleIdentifier` | Unique id (e.g. `edu.ucsb.figuregallery`) |
+| `CFBundleIdentifier` | Unique id (e.g. `edu.ucsb.figureviewer`) |
 | `CFBundleExecutable` | Filename inside `Contents/MacOS/` |
 | `CFBundleIconFile` | Icon resource name **without** `.icns` |
 | `NSHighResolutionCapable` | Retina-aware drawing |
@@ -44,7 +44,7 @@ Our template lives at [`packaging/macos/Info.plist`](../packaging/macos/Info.pli
 
 macOS wants a multi-resolution icon set, not one PNG. Typical workflow:
 
-1. Design a **1024×1024** master PNG (`assets/figuregallery/icon_1024.png`)
+1. Design a **1024×1024** master PNG (`assets/figureviewer/icon_1024.png`)
 2. Generate sizes (16…512 and `@2x`) into an `.iconset` folder (`sips`)
 3. Compile with Apple’s `iconutil -c icns …`
 
@@ -57,7 +57,7 @@ A CLI entry point (`figuregallery` from `pyproject.toml`) is fine in a Terminal.
 - No “Terminal pops open”
 - No spam on stderr at startup (shortcuts help, etc.)
 
-We handle that with `FIGUREGALLERY_QUIET=1` set by the launcher, and by skipping the console help when stderr is not a TTY. The same Python package still powers both CLI and app.
+We handle that with `FIGUREVIEWER_QUIET=1` / `FIGUREGALLERY_QUIET=1` set by the launcher, and by skipping the console help when stderr is not a TTY. The same Python package still powers both CLI and app.
 
 ---
 
@@ -65,7 +65,7 @@ We handle that with `FIGUREGALLERY_QUIET=1` set by the launcher, and by skipping
 
 ```text
                     ┌─────────────────────────────────────┐
-                    │     Figure Gallery.app (bundle)     │
+                    │     Figure Viewer.app (bundle)      │
                     │  Info.plist + icon + MacOS stub     │
                     └─────────────────────────────────────┘
                                       │
@@ -86,7 +86,7 @@ We handle that with `FIGUREGALLERY_QUIET=1` set by the launcher, and by skipping
 | **Effort** | Low | Medium–high (tooling, debugging missing libs, signing) |
 | **Best for** | Personal Dock/Spotlight on *your* machine | Sharing with collaborators who shouldn’t touch conda |
 
-Both approaches can keep a normal CLI (`figuregallery`) for development.
+Both approaches can keep normal CLIs (`figureviewer --desktop`, `figuregallery`) for development.
 
 ---
 
@@ -94,19 +94,20 @@ Both approaches can keep a normal CLI (`figuregallery`) for development.
 
 ### Idea
 
-The `.app` is a **friendly face**. Its `MacOS/FigureGallery` script roughly does:
+The `.app` is a **friendly face**. Its `MacOS/FigureViewer` script roughly does:
 
 ```bash
-export FIGUREGALLERY_QUIET=1
-export FIGUREGALLERY_APP_ICON="…/Resources/AppIcon.icns"
-exec /path/to/figviewer/bin/python -m figuregallery.cli "$@"
+export FIGUREVIEWER_QUIET=1
+export FIGUREVIEWER_APP_ICON="…/Resources/AppIcon.icns"
+exec /path/to/figviewer/bin/python -m figureviewer.cli --desktop "$@"
 ```
 
 So:
 
-- Spotlight finds “Figure Gallery”
+- Spotlight finds “Figure Viewer”
 - Dock shows your `.icns`
-- Execution is still the same code as `conda activate figviewer && figuregallery`
+- Execution is still the same code as `conda activate figviewer && figureviewer --desktop`
+- Compare / Browse modes live in that one process (toolbar toggle)
 
 Install / refresh:
 
@@ -115,18 +116,21 @@ conda activate figviewer
 pip install -e .    # once, or after packaging changes
 ./packaging/macos/install_app.sh
 # optional: --icon path/to/1024.png  --prefix ~/Applications
-open ~/Applications/Figure\ Gallery.app
+open ~/Applications/Figure\ Viewer.app
 ```
+
+`install_app.sh` also **removes** a legacy `Figure Gallery.app` in the same prefix if one is still around.
 
 Details: [`packaging/macos/install_app.sh`](../packaging/macos/install_app.sh), logo prompts in [`LOGO_PROMPTS.md`](../packaging/macos/LOGO_PROMPTS.md).
 
 ### What the install script does
 
 1. **Resolve Python** — prefer `conda run -n figviewer which python` (overridable with `--python`)
-2. **Sanity-check** — that interpreter can `import figuregallery, PyQt6`
+2. **Sanity-check** — that interpreter can `import figureviewer, figuregallery, PyQt6`
 3. **Build icon** — PNG → `.iconset` → `AppIcon.icns`
-4. **Write the bundle** under `~/Applications/Figure Gallery.app` (or `--prefix`)
+4. **Write the bundle** under `~/Applications/Figure Viewer.app` (or `--prefix`)
 5. **Bake absolute paths** into the launcher so double-click does not depend on your shell `PATH`
+6. **Delete legacy** `Figure Gallery.app` in that prefix if present
 
 ### Strengths
 
@@ -139,7 +143,7 @@ Details: [`packaging/macos/install_app.sh`](../packaging/macos/install_app.sh), 
 
 - **Not portable.** Another machine needs conda, the `figviewer` env, and `pip install -e .` (or an equivalent install). The `.app` alone is not enough.
 - **Brittle paths.** If you rename the conda env, move Anaconda, or reinstall Python, re-run `install_app.sh`.
-- **Editable install coupling.** The stub imports `figuregallery` from whatever that Python’s `site-packages` sees. That’s usually what you want while developing; it’s surprising if you expect the `.app` to be a frozen snapshot of last week’s code.
+- **Editable install coupling.** The stub imports `figureviewer` / `figuregallery` from whatever that Python’s `site-packages` sees. That’s usually what you want while developing; it’s surprising if you expect the `.app` to be a frozen snapshot of last week’s code.
 - **Dock identity edge cases.** A shell script that `exec`s into Python usually keeps the right icon when opened via the `.app`, but odd setups (launching the inner Python binary directly) can show a generic Python icon.
 
 ### Mental model
@@ -155,8 +159,8 @@ Details: [`packaging/macos/install_app.sh`](../packaging/macos/install_app.sh), 
 Bake a **private copy** of the runtime into the bundle (or a folder the stub knows about) so double-click does not need conda on the target Mac.
 
 ```text
-Figure Gallery.app/Contents/
-  MacOS/FigureGallery          # bootloader
+Figure Viewer.app/Contents/
+  MacOS/FigureViewer           # bootloader
   Frameworks/ …                # Qt, Python dylibs, …
   Resources/                   # icon, maybe data files
   # plus your package + site-packages, layout depends on the tool
@@ -211,20 +215,21 @@ Size and startup time are usually worse than the thin launcher; portability is t
 
 ### Hybrid option (middle ground)
 
-Ship a **relocatable env tarball** (micromamba/conda-pack) plus the same thin `.app` stub that `exec`s `…/envs/figviewer/bin/python -m figuregallery.cli`. Still larger than a freezer’s minimal set, but often easier than teaching PyInstaller about every binary dependency—and still “copy folder + open app” for a collaborator.
+Ship a **relocatable env tarball** (micromamba/conda-pack) plus the same thin `.app` stub that `exec`s `…/envs/figviewer/bin/python -m figureviewer.cli --desktop`. Still larger than a freezer’s minimal set, but often easier than teaching PyInstaller about every binary dependency—and still “copy folder + open app” for a collaborator.
 
 ---
 
-## 5. How this maps to Figure Gallery / Figure Viewer today
+## 5. How this maps to Figure Viewer today
 
 | Piece | Role |
 |-------|------|
-| `figuregallery` console script | Day-to-day CLI |
-| `FIGUREGALLERY_QUIET` / TTY check | Quiet when launched as an app |
-| `FIGUREGALLERY_APP_ICON` | `QApplication.setWindowIcon` while running |
-| `packaging/macos/install_app.sh` | Builds the **thin** `.app` into `~/Applications` |
+| `figureviewer --desktop` | Unified Compare + Browse shell |
+| `figuregallery` console script | Alias → Browse mode |
+| `FIGUREVIEWER_QUIET` / `FIGUREGALLERY_QUIET` | Quiet when launched as an app |
+| `FIGUREVIEWER_APP_ICON` / `FIGUREGALLERY_APP_ICON` | `QApplication.setWindowIcon` while running |
+| `packaging/macos/install_app.sh` | Builds **Figure Viewer.app** (thin launcher) into `~/Applications` |
 | `packaging/macos/bootstrap_install.sh` | Create/use `figviewer` env + editable install + thin `.app` |
-| Future desktop FigureViewer merge | Same packaging story: one umbrella `.app`, stub points at one Python entry that can offer Browse vs Compare modes |
+| Mode toggle (toolbar / `Ctrl+1`·`Ctrl+2`) | Switch to the other mode without quitting |
 
 A frozen build would **not** replace the need for a good GUI entry point; it would change only *where Python and libraries live*.
 
@@ -245,7 +250,7 @@ That script:
 2. **Creates** the `figviewer` env from `environment.yaml` if it does not exist  
    (optional `--update-env` refreshes an existing env)
 3. `pip install -e .` into that env (editable — code updates track the clone until you freeze)
-4. Runs [`install_app.sh`](../packaging/macos/install_app.sh) to write `~/Applications/Figure Gallery.app`
+4. Runs [`install_app.sh`](../packaging/macos/install_app.sh) to write `~/Applications/Figure Viewer.app`
 
 Still requires conda and a clone of the repo. It does **not** replace a frozen app; it removes the “read the README and type four commands” tax.
 

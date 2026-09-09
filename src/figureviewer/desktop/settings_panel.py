@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -123,7 +124,8 @@ class SettingsPanel(QWidget):
 
         nav_box = QGroupBox("Navigation")
         nav_layout = QVBoxLayout(nav_box)
-        nav_layout.addWidget(QLabel("← previous · → next · Home first · End last"))
+        mod = "⌘" if sys.platform == "darwin" else "Ctrl+"
+        nav_layout.addWidget(QLabel(f"← previous · → next · {mod}← first · {mod}→ last"))
         nav_layout.addLayout(nav_row)
 
         layout = QVBoxLayout(self)

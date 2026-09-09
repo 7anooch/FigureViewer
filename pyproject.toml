@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "figureviewer"
 version = "0.1.0"
-description = "Compare corresponding figures across multiple directories in a synchronized multi-panel view."
+description = "Compare and browse research figures: multi-panel sync (Compare) and tree gallery (Browse)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

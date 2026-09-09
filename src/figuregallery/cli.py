@@ -14,7 +14,9 @@ from figuregallery.ui.app import run
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="figuregallery",
-        description="Browse figures across a directory tree grouped by filename.",
+        description=(
+            "Browse figures across a directory tree (Figure Viewer Browse mode)."
+        ),
     )
     parser.add_argument("root", nargs="?", type=Path, help="Root directory to scan")
     parser.add_argument(
@@ -54,7 +56,11 @@ def main(argv: list[str] | None = None) -> None:
     else:
         initial_root = load_last_root()
 
-    quiet = os.environ.get("FIGUREGALLERY_QUIET") == "1" or not sys.stderr.isatty()
+    quiet = (
+        os.environ.get("FIGUREVIEWER_QUIET") == "1"
+        or os.environ.get("FIGUREGALLERY_QUIET") == "1"
+        or not sys.stderr.isatty()
+    )
     if not quiet:
         print(shortcuts_help_text(for_console=True), file=sys.stderr)
         print(file=sys.stderr)

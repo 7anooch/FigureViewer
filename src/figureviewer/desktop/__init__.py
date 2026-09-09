@@ -1,1 +1,1 @@
-"""Native PyQt6 UI for Figure Viewer (launched with ``figureviewer --desktop``)."""
+"""Native PyQt6 UI for Figure Viewer (Compare + Browse; ``figureviewer --desktop``)."""
