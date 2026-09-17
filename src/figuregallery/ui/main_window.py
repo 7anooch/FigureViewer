@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from figurecommon.exts import is_video_path
 from figurecommon.paths import pick_directory_dialog
 from figurecommon.scan import ScanOptions
 from figuregallery.browse_pacing import BrowsePacing
@@ -34,12 +35,17 @@ from figuregallery.playlist import (
     build_playlist,
     category_position,
     filter_by_path_prefix,
+    first_index_for_category,
     list_figures_in_directory,
     preserve_position,
 )
-from figuregallery.directory_tree import filter_by_directory_exclusions
+from figuregallery.directory_tree import filter_by_directory_exclusions, prune_directory_exclusions
 from figuregallery.export import export_playlist_pdf
-from figuregallery.settings import save_last_root
+from figuregallery.settings import (
+    load_hide_unavailable_categories,
+    save_hide_unavailable_categories,
+    save_last_root,
+)
 from figuregallery.shortcuts import empty_state_html, shortcuts_help_text
 from figuregallery.ui.category_panel import CategoryPanel
 from figuregallery.ui.directory_filter_dialog import DirectoryFilterDialog
@@ -76,6 +82,7 @@ class MainWindow(QMainWindow):
         self._playlist: list[FigureRef] = []
         self._path_filter: Path | None = None
         self._excluded_dirs: set[Path] = set()
+        self._hide_unavailable_categories = load_hide_unavailable_categories()
         self._this_folder_only = False
         self._this_folder_anchor: Path | None = None
         self._current_index = 0
@@ -210,7 +217,9 @@ class MainWindow(QMainWindow):
         self._root_picker.closed.connect(self._on_root_picker_closed)
 
         self._category_panel = CategoryPanel()
+        self._category_panel.set_hide_unavailable(self._hide_unavailable_categories)
         self._category_panel.selection_changed.connect(self._on_selection_changed)
+        self._category_panel.category_activated.connect(self._on_category_activated)
         self._category_panel.open_root_picker_requested.connect(self._open_root_picker)
 
         self._path_bar = PathBar()
@@ -270,6 +279,7 @@ class MainWindow(QMainWindow):
         _figure_shortcut("Ctrl+Left", self._go_first)
         _figure_shortcut("Ctrl+Right", self._go_last)
         _figure_shortcut(Qt.Key.Key_Space, self._go_next)
+        _figure_shortcut("P", self._viewport.toggle_playback)
         _figure_shortcut("Ctrl+=", lambda: self._viewport.zoom_by(1.25))
         _figure_shortcut("Ctrl++", lambda: self._viewport.zoom_by(1.25))
         _figure_shortcut("Ctrl+-", lambda: self._viewport.zoom_by(1.0 / 1.25))
@@ -355,6 +365,7 @@ class MainWindow(QMainWindow):
         self._scan_root(self._scan_index.root)
 
     def _scan_root(self, root: Path) -> None:
+        previous_root = self._scan_index.root if self._scan_index is not None else None
         started = time.perf_counter()
         try:
             index = build_scan_index(root, options=ScanOptions())
@@ -363,14 +374,34 @@ class MainWindow(QMainWindow):
             return
 
         elapsed = time.perf_counter() - started
+        root_changed = previous_root is None or previous_root != index.root
         self._scan_index = index
         save_last_root(index.root)
         self._path_filter = None
-        self._excluded_dirs = set()
         self._clear_this_folder_only()
+        # Drop playlist cache so Directories… cannot reopen against a prior scan.
+        self._base_playlist = []
+        self._playlist = []
+        if root_changed:
+            self._excluded_dirs = set()
+        else:
+            # Same root rescan: keep exclusions that still exist in the new tree.
+            self._excluded_dirs = prune_directory_exclusions(self._excluded_dirs, index.refs)
         self._categories = group_index(index, self._group_mode)
-        self._category_panel.set_excluded_directories(self._excluded_dirs)
-        self._category_panel.set_categories(self._categories)
+        if root_changed:
+            # Do not keep category names across roots — shared stems make Directories…
+            # look like the previous experiment's tree.
+            self._category_panel.apply_scan(
+                self._categories,
+                self._excluded_dirs,
+                select_all=True,
+            )
+        else:
+            self._category_panel.apply_scan(
+                self._categories,
+                self._excluded_dirs,
+                preserve_selection=self._category_panel.selected_keys(),
+            )
         self._root_label.setText(f"Root: {index.root}")
         pdf_count = sum(1 for r in index.refs if r.absolute_path.suffix.lower() == ".pdf")
         other = len(index.refs) - pdf_count
@@ -438,6 +469,19 @@ class MainWindow(QMainWindow):
         self._clear_this_folder_only()
         self._rebuild_playlist(reset_index=True)
 
+    def _on_category_activated(self, key: str) -> None:
+        """Row click (not checkbox): jump to the first playlist figure in that category."""
+        self._category_panel.select_key(key)
+        index = first_index_for_category(
+            self._playlist,
+            key,
+            group_mode=self._group_mode,
+        )
+        if index is None:
+            return
+        self._set_index(index)
+        self._viewport.focus_display()
+
     def _rebuild_playlist(self, *, reset_index: bool) -> None:
         old_playlist = self._playlist
         old_index = self._current_index
@@ -447,7 +491,7 @@ class MainWindow(QMainWindow):
             self._base_playlist = []
             self._playlist = []
             self._current_index = 0
-            self._dir_filter_action.setEnabled(False)
+            self._dir_filter_action.setEnabled(self._scan_has_displayable_figures())
             self._this_folder_action.setEnabled(False)
             self._export_action.setEnabled(False)
             self._clear_this_folder_only()
@@ -463,7 +507,9 @@ class MainWindow(QMainWindow):
             self._sort_mode,
             group_mode=self._group_mode,
         )
-        self._dir_filter_action.setEnabled(bool(self._base_playlist))
+        self._dir_filter_action.setEnabled(
+            bool(self._base_playlist) or self._scan_has_displayable_figures()
+        )
         self._this_folder_action.setEnabled(bool(self._base_playlist))
         self._apply_playlist_filters(
             reset_index=reset_index,
@@ -534,6 +580,11 @@ class MainWindow(QMainWindow):
             caption += f" · filtered to {self._path_filter}"
         self._caption.setText(caption)
         self._nav.set_index(self._current_index)
+
+        if is_video_path(ref.absolute_path):
+            self._viewport.set_video(ref.absolute_path)
+            self._prefetch_neighbors()
+            return
 
         cached = self._cache.get(
             ref.absolute_path, pdf_dpi=self._pdf_dpi, trim=self._trim_whitespace
@@ -607,6 +658,8 @@ class MainWindow(QMainWindow):
             if index < 0 or index >= len(self._playlist):
                 continue
             ref = self._playlist[index]
+            if is_video_path(ref.absolute_path):
+                continue
             if self._cache.get(
                 ref.absolute_path, pdf_dpi=self._pdf_dpi, trim=self._trim_whitespace
             ) is not None:
@@ -688,19 +741,86 @@ class MainWindow(QMainWindow):
         self._clear_this_folder_only()
         self._apply_playlist_filters(reset_index=False)
 
+    def _scan_has_displayable_figures(self) -> bool:
+        if self._scan_index is None:
+            return False
+        return any(ref.is_displayable for ref in self._scan_index.refs)
+
+    def _refs_for_directory_filter(self) -> list[FigureRef]:
+        """Full directory tree for the current scan (not limited to selected categories).
+
+        Category selection used to shrink this set, so after a root change shared stem
+        names made Directories… look like the previous experiment's layout.
+        """
+        if self._scan_index is None:
+            return []
+        return [ref for ref in self._scan_index.refs if ref.is_displayable]
+
     def _open_directory_filter(self) -> None:
-        if not self._base_playlist:
+        # Entire body is a QAction slot: any uncaught exception aborts under PyQt6.
+        try:
+            refs = self._refs_for_directory_filter()
+            if not refs:
+                return
+            # Keep playlist cache aligned with the live scan before editing exclusions.
+            selected = self._category_panel.selected_keys()
+            if selected:
+                self._base_playlist = build_playlist(
+                    self._categories,
+                    selected,
+                    self._sort_mode,
+                    group_mode=self._group_mode,
+                )
+            scan_root = self._scan_index.root if self._scan_index is not None else None
+            dialog = DirectoryFilterDialog(
+                refs,
+                self._excluded_dirs,
+                hide_unavailable_categories=self._hide_unavailable_categories,
+                scan_root=scan_root,
+                parent=self,
+            )
+            result: tuple[set[Path], bool] | None = None
+            try:
+                if dialog.exec() == QDialog.DialogCode.Accepted:
+                    # Prefer snapshot taken in accept() — never call into dialog
+                    # widgets after exec() (Qt 6.11 + PyQt can already be tearing down).
+                    result = dialog.accepted_result()
+                    if result is None:
+                        result = (
+                            set(dialog.excluded_directories()),
+                            bool(dialog.hide_unavailable_categories()),
+                        )
+            finally:
+                dialog.deleteLater()
+
+            if result is None:
+                return
+
+            excluded, hide_unavailable = result
+            # Apply outside this QAction stack so list/viewport rebuilds are not
+            # nested under the toolbar click that opened the modal.
+            QTimer.singleShot(
+                0,
+                lambda e=set(excluded), h=bool(hide_unavailable): self._apply_directory_filter_result(
+                    e, h
+                ),
+            )
+        except Exception:
             return
-        dialog = DirectoryFilterDialog(
-            self._base_playlist,
-            self._excluded_dirs,
-            parent=self,
-        )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
-            return
-        self._excluded_dirs = dialog.excluded_directories()
-        self._category_panel.set_excluded_directories(self._excluded_dirs)
-        self._apply_playlist_filters(reset_index=False)
+
+    def _apply_directory_filter_result(
+        self, excluded: set[Path], hide_unavailable: bool
+    ) -> None:
+        try:
+            live_refs = self._refs_for_directory_filter()
+            self._excluded_dirs = prune_directory_exclusions(excluded, live_refs)
+            self._hide_unavailable_categories = hide_unavailable
+            save_hide_unavailable_categories(self._hide_unavailable_categories)
+            self._category_panel.set_hide_unavailable(self._hide_unavailable_categories)
+            self._category_panel.set_excluded_directories(self._excluded_dirs)
+            self._apply_playlist_filters(reset_index=False)
+        except Exception as exc:
+            self._status.showMessage(f"Directory filter apply failed: {exc}", 6000)
 
     def _export_pdf(self) -> None:
         if not self._playlist:

@@ -98,6 +98,112 @@ def test_viewport_snapshot_position_and_stem(tmp_path: Path) -> None:
     assert snap.figure_paths[0].name == "trial_002.png"
 
 
+def test_list_figures_includes_mp4(tmp_path: Path) -> None:
+    _png(tmp_path / "plot.png")
+    (tmp_path / "clip.mp4").write_bytes(b"not-a-real-video")
+    names = [p.name for p in list_figures(tmp_path)]
+    assert names == ["clip.mp4", "plot.png"]
+
+
+def test_compare_viewport_snapshot_includes_videos(tmp_path: Path) -> None:
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    (left / "run.mp4").write_bytes(b"x")
+    (right / "run.mp4").write_bytes(b"x")
+    state = ViewerState(
+        panel_directories=[str(left), str(right)],
+        sync_mode=True,
+        match_by="position",
+        current_index=0,
+        columns_per_row=2,
+    )
+    snap = get_viewport_snapshot(state)
+    assert snap is not None
+    assert [p.name for p in snap.figure_paths if p] == ["run.mp4", "run.mp4"]
+
+
+def test_compare_synced_playback_toggle(monkeypatch, tmp_path: Path) -> None:
+    from figuregallery.platform import configure_qt_plugins
+    from figureviewer.desktop.viewport import MultiPanelViewport, _PanelCell
+    from figureviewer.display_state import ViewportSnapshot
+    from figureviewer.figures import panels_from_directories
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    configure_qt_plugins()
+    from PyQt6.QtWidgets import QApplication, QPushButton, QWidget
+
+    app = QApplication.instance() or QApplication([])
+
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+    left_vid = left / "a.mp4"
+    right_vid = right / "a.mp4"
+    left_vid.write_bytes(b"x")
+    right_vid.write_bytes(b"x")
+
+    panels = panels_from_directories([left, right])
+    snap = ViewportSnapshot(
+        panels=panels,
+        figure_paths=[left_vid, right_vid],
+        index=0,
+        total=1,
+        current_label="1",
+        columns_per_row=2,
+    )
+
+    # Avoid real QMediaPlayer source decode in CI / offscreen.
+    calls: list[str] = []
+
+    def fake_set_video(self, path: Path) -> None:  # noqa: ANN001
+        self._figure_path = path.expanduser().resolve()
+        self._video_active = True
+        self._source = None
+        self._scroll.hide()
+        self._message.hide()
+        # Minimal stand-in so has_videos / layout work without Qt Multimedia.
+        if self._video_panel is None:
+            self._video_panel = QWidget()
+            self._play_btn = QPushButton("Pause")
+            self._layout.insertWidget(self._layout.count() - 1, self._video_panel, stretch=1)
+        self._video_panel.show()
+        assert self._play_btn is not None
+        self._play_btn.setText("Pause")
+        calls.append(f"set:{path.name}")
+
+    def fake_play(self) -> None:  # noqa: ANN001
+        calls.append("play")
+        self._play_btn.setText("Pause")
+
+    def fake_pause(self) -> None:  # noqa: ANN001
+        calls.append("pause")
+        self._play_btn.setText("Play")
+
+    def fake_is_playing(self) -> bool:  # noqa: ANN001
+        return self._play_btn.text() == "Pause"
+
+    monkeypatch.setattr(_PanelCell, "set_video", fake_set_video)
+    monkeypatch.setattr(_PanelCell, "play", fake_play)
+    monkeypatch.setattr(_PanelCell, "pause", fake_pause)
+    monkeypatch.setattr(_PanelCell, "is_playing", fake_is_playing)
+
+    vp = MultiPanelViewport()
+    vp.show_snapshot(snap)
+    assert vp.has_videos()
+    assert calls.count("set:a.mp4") == 2
+
+    calls.clear()
+    vp.toggle_playback()  # any playing (Pause label) → pause all
+    assert calls == ["pause", "pause"]
+    vp.toggle_playback()  # none playing → play all
+    assert calls == ["pause", "pause", "play", "play"]
+    vp.deleteLater()
+    assert app is not None
+
+
 def test_export_titles_and_metadata(tmp_path: Path) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()

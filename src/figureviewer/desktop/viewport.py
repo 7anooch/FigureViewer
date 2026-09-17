@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QImage,
     QMouseEvent,
@@ -15,7 +15,9 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QApplication,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
@@ -23,22 +25,44 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from figurecommon.exts import is_video_path
 from figuregallery.browse_pacing import BrowsePacing
 from figuregallery.cache import ImageCache
 from figuregallery.ui.loader import FigureLoader
 from figureviewer.display_state import ViewportSnapshot
 
+try:
+    from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PyQt6.QtMultimediaWidgets import QVideoWidget
+
+    _HAS_MULTIMEDIA = True
+except ImportError:  # pragma: no cover
+    _HAS_MULTIMEDIA = False
+
 _MIN_ZOOM = 0.25
 _MAX_ZOOM = 8.0
 _GESTURE_SUPPRESS_S = 0.35
 _ZOOM_HINT_FIT = "Zoom: Fit  ·  pinch or ⌘/Ctrl+scroll  ·  double-click to reset"
+_VIDEO_HINT = (
+    "Video  ·  scrub per panel  ·  P or Pause toggles all panels  ·  ←/→ change figure"
+)
+
+
+def _format_ms(ms: int) -> str:
+    total_s = max(0, int(ms) // 1000)
+    hours, rem = divmod(total_s, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
 
 
 class _PanelCell(QWidget):
-    """One panel: fit/natural/custom at zoom 1.0; gestures request shared viewport zoom."""
+    """One panel: still figure (zoom) or looping video (synced play/pause via parent)."""
 
     zoom_by_requested = pyqtSignal(float, object)  # factor, optional QPoint
     reset_zoom_requested = pyqtSignal()
+    playback_toggle_requested = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -67,18 +91,98 @@ class _PanelCell(QWidget):
         self._message.setStyleSheet("color: #a33;")
         self._message.hide()
 
+        # Built on first set_video() so still-only panels skip Qt Multimedia.
+        self._video_panel: QWidget | None = None
+        self._player = None
+        self._play_btn: QPushButton | None = None
+        self._video_active = False
+        self._scrubbing = False
+
         self._source: QImage | None = None
         self._figure_path: Path | None = None
         self._fill = True
         self._logical_width: int | None = None
         self._zoom = 1.0
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.addWidget(self._title)
-        layout.addWidget(self._local_slider)
-        layout.addWidget(self._scroll, stretch=1)
-        layout.addWidget(self._message)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(4, 4, 4, 4)
+        self._layout.addWidget(self._title)
+        self._layout.addWidget(self._local_slider)
+        self._layout.addWidget(self._scroll, stretch=1)
+        self._layout.addWidget(self._message)
+
+    def _ensure_video_panel(self) -> None:
+        if self._video_panel is not None:
+            return
+        self._video_panel, self._player, self._play_btn = self._build_video_panel()
+        self._video_panel.hide()
+        # Insert above the message label.
+        self._layout.insertWidget(self._layout.count() - 1, self._video_panel, stretch=1)
+
+    def _build_video_panel(self):
+        panel = QWidget()
+        panel.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(4)
+
+        play_btn = QPushButton("Pause")
+        play_btn.setFixedWidth(72)
+        play_btn.setToolTip("Play / pause all video panels")
+        play_btn.clicked.connect(self.playback_toggle_requested.emit)
+
+        self._position_label = QLabel("0:00")
+        self._position_label.setMinimumWidth(40)
+        self._position_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._duration_label = QLabel("0:00")
+        self._duration_label.setMinimumWidth(40)
+        self._duration_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self._scrub = QSlider(Qt.Orientation.Horizontal)
+        self._scrub.setRange(0, 0)
+        self._scrub.setSingleStep(1000)
+        self._scrub.setPageStep(5000)
+        self._scrub.setToolTip("Scrub this panel’s video")
+        self._scrub.sliderPressed.connect(self._on_scrub_pressed)
+        self._scrub.sliderReleased.connect(self._on_scrub_released)
+        self._scrub.sliderMoved.connect(self._on_scrub_moved)
+
+        player = None
+        if _HAS_MULTIMEDIA:
+            video_widget = QVideoWidget()
+            video_widget.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            video_widget.setMinimumHeight(100)
+            player = QMediaPlayer(self)
+            audio = QAudioOutput(self)
+            audio.setVolume(0.0)  # avoid overlapping audio across panels
+            player.setAudioOutput(audio)
+            player.setVideoOutput(video_widget)
+            player.setLoops(QMediaPlayer.Loops.Infinite)
+            player.playbackStateChanged.connect(self._on_playback_state_changed)
+            player.positionChanged.connect(self._on_position_changed)
+            player.durationChanged.connect(self._on_duration_changed)
+            player.errorOccurred.connect(self._on_player_error)
+            panel_layout.addWidget(video_widget, stretch=1)
+        else:
+            missing = QLabel("Video playback requires Qt Multimedia.")
+            missing.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            missing.setStyleSheet("color: #666;")
+            panel_layout.addWidget(missing, stretch=1)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(6)
+        controls.addWidget(play_btn)
+        controls.addWidget(self._position_label)
+        controls.addWidget(self._scrub, stretch=1)
+        controls.addWidget(self._duration_label)
+        panel_layout.addLayout(controls)
+        return panel, player, play_btn
 
     def set_title(self, text: str) -> None:
         self._title.setText(text)
@@ -86,35 +190,154 @@ class _PanelCell(QWidget):
     def set_figure_path(self, path: Path | None) -> None:
         self._figure_path = path
 
+    @property
+    def is_showing_video(self) -> bool:
+        return self._video_active
+
+    def is_playing(self) -> bool:
+        if not self._video_active or self._player is None:
+            return False
+        return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+
+    def play(self) -> None:
+        if self._video_active and self._player is not None:
+            self._player.play()
+
+    def pause(self) -> None:
+        if self._video_active and self._player is not None:
+            self._player.pause()
+
     def set_image(self, image: QImage, *, fill: bool, logical_width: int | None = None, zoom: float = 1.0) -> None:
+        self._stop_video()
         self._source = image
         self._fill = fill
         self._logical_width = logical_width
         self._zoom = zoom
         self._message.hide()
+        if self._video_panel is not None:
+            self._video_panel.hide()
         self._scroll.show()
         self._prepare_default_view()
         self._update_pixmap(anchor=None)
         if abs(zoom - 1.0) < 1e-3:
             QTimer.singleShot(0, self._refit_if_default_zoom)
 
+    def set_video(self, path: Path) -> None:
+        """Show and autoplay a local video (looping). Audio is muted in Compare."""
+        resolved = path.expanduser().resolve()
+        self._ensure_video_panel()
+        assert self._video_panel is not None and self._play_btn is not None
+        if not _HAS_MULTIMEDIA or self._player is None:
+            self.set_message(
+                f"Cannot play video (Qt Multimedia unavailable):\n{resolved.name}"
+            )
+            self._figure_path = resolved
+            return
+        self._source = None
+        self._figure_path = resolved
+        self._zoom = 1.0
+        self._prepare_default_view()
+        self._scroll.hide()
+        self._message.hide()
+        self._video_panel.show()
+        self._video_active = True
+        self._scrubbing = False
+        self._reset_scrub(0, 0)
+        self._player.stop()
+        self._player.setSource(QUrl.fromLocalFile(str(resolved)))
+        self._player.play()
+        self._play_btn.setText("Pause")
+
     def set_loading(self) -> None:
         """Placeholder while the figure loads — keep path for reveal."""
+        self._stop_video()
         self._source = None
         self._zoom = 1.0
         self._prepare_default_view()
+        if self._video_panel is not None:
+            self._video_panel.hide()
         self._scroll.hide()
         self._message.setText("Loading…")
         self._message.show()
 
     def set_message(self, text: str) -> None:
+        self._stop_video()
         self._source = None
         self._figure_path = None
         self._zoom = 1.0
         self._prepare_default_view()
+        if self._video_panel is not None:
+            self._video_panel.hide()
         self._scroll.hide()
         self._message.setText(text)
         self._message.show()
+
+    def _stop_video(self) -> None:
+        was_active = self._video_active
+        self._video_active = False
+        self._scrubbing = False
+        if self._player is not None:
+            self._player.stop()
+            self._player.setSource(QUrl())
+        if self._play_btn is not None:
+            self._play_btn.setText("Play")
+        if was_active:
+            self._reset_scrub(0, 0)
+        if self._video_panel is not None:
+            self._video_panel.hide()
+
+    def _reset_scrub(self, position_ms: int, duration_ms: int) -> None:
+        if self._video_panel is None:
+            return
+        duration_ms = max(0, int(duration_ms))
+        position_ms = max(0, min(int(position_ms), duration_ms or 0))
+        self._scrub.blockSignals(True)
+        self._scrub.setRange(0, duration_ms)
+        self._scrub.setValue(position_ms)
+        self._scrub.blockSignals(False)
+        self._position_label.setText(_format_ms(position_ms))
+        self._duration_label.setText(_format_ms(duration_ms))
+
+    def _on_duration_changed(self, duration_ms: int) -> None:
+        if not self._video_active:
+            return
+        position = self._player.position() if self._player is not None else 0
+        self._reset_scrub(position, duration_ms)
+
+    def _on_position_changed(self, position_ms: int) -> None:
+        if not self._video_active or self._scrubbing:
+            return
+        self._scrub.blockSignals(True)
+        self._scrub.setValue(max(0, int(position_ms)))
+        self._scrub.blockSignals(False)
+        self._position_label.setText(_format_ms(position_ms))
+
+    def _on_scrub_pressed(self) -> None:
+        self._scrubbing = True
+
+    def _on_scrub_moved(self, position_ms: int) -> None:
+        self._position_label.setText(_format_ms(position_ms))
+        if self._player is not None and self._video_active:
+            self._player.setPosition(int(position_ms))
+
+    def _on_scrub_released(self) -> None:
+        if self._player is not None and self._video_active:
+            self._player.setPosition(int(self._scrub.value()))
+        self._scrubbing = False
+
+    def _on_playback_state_changed(self, state) -> None:  # noqa: ANN001
+        if not self._video_active:
+            return
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self._play_btn.setText("Pause" if playing else "Play")
+
+    def _on_player_error(self, error, message: str = "") -> None:  # noqa: ANN001
+        del error
+        if not self._video_active:
+            return
+        name = self._figure_path.name if self._figure_path else "video"
+        detail = message.strip() or "Playback failed"
+        self.set_message(f"Could not play {name}:\n{detail}")
 
     def refit(self) -> None:
         if self._source is not None and not self._source.isNull():
@@ -322,6 +545,10 @@ class MultiPanelViewport(QWidget):
         if self._empty.isVisible():
             self.setFocus(Qt.FocusReason.ShortcutFocusReason)
             return
+        for cell in self._cells:
+            if cell.is_showing_video and cell._video_panel is not None:
+                cell._video_panel.setFocus(Qt.FocusReason.ShortcutFocusReason)
+                return
         # Outer scroll stays visible even while panel cells show "Loading…"
         # (per-cell scrolls are hidden then, so focusing them can fail).
         self._scroll.setFocus(Qt.FocusReason.ShortcutFocusReason)
@@ -348,8 +575,10 @@ class MultiPanelViewport(QWidget):
         self._apply_browse_budget()
 
     def prefetch_paths(self, paths: list[Path]) -> None:
-        """Warm neighboring figure paths (full multi-panel sets) in the background."""
+        """Warm neighboring still-figure paths (full multi-panel sets) in the background."""
         for path in paths:
+            if is_video_path(path):
+                continue
             if self._cache.get(path, pdf_dpi=self._pdf_dpi, trim=self._trim) is not None:
                 continue
             resolved = path.resolve()
@@ -366,6 +595,21 @@ class MultiPanelViewport(QWidget):
             if cell._figure_path is not None:
                 return cell._figure_path
         return None
+
+    def has_videos(self) -> bool:
+        return any(cell.is_showing_video for cell in self._cells)
+
+    def toggle_playback(self) -> None:
+        """Pause all video panels if any are playing; otherwise play all."""
+        video_cells = [cell for cell in self._cells if cell.is_showing_video]
+        if not video_cells:
+            return
+        if any(cell.is_playing() for cell in video_cells):
+            for cell in video_cells:
+                cell.pause()
+        else:
+            for cell in video_cells:
+                cell.play()
 
     def zoom_by(self, factor: float, *, anchor: QPoint | None = None, source: _PanelCell | None = None) -> None:
         if time.monotonic() < self._ignore_zoom_until:
@@ -419,6 +663,7 @@ class MultiPanelViewport(QWidget):
             cell = _PanelCell()
             cell.zoom_by_requested.connect(self._on_cell_zoom_by)
             cell.reset_zoom_requested.connect(self.reset_zoom)
+            cell.playback_toggle_requested.connect(self.toggle_playback)
             row, col = divmod(i, cols)
             self._grid.addWidget(cell, row, col)
             self._cells.append(cell)
@@ -446,6 +691,9 @@ class MultiPanelViewport(QWidget):
                 cell._local_slider.valueChanged.connect(
                     lambda value, k=key: self.local_index_changed.emit(k, int(value))
                 )
+            if is_video_path(path):
+                cell.set_video(path)
+                continue
             cached = self._cache.get(path, pdf_dpi=self._pdf_dpi, trim=self._trim)
             if cached is not None:
                 self._apply_image(cell, cached)
@@ -472,7 +720,9 @@ class MultiPanelViewport(QWidget):
         self.zoom_by(factor, anchor=point, source=cell)
 
     def _emit_zoom_hint(self) -> None:
-        if not any(cell._source is not None for cell in self._cells):
+        if any(cell.is_showing_video for cell in self._cells):
+            hint = _VIDEO_HINT
+        elif not any(cell._source is not None for cell in self._cells):
             hint = ""
         elif abs(self._zoom - 1.0) < 1e-3:
             hint = _ZOOM_HINT_FIT

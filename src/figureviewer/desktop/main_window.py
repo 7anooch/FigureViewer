@@ -166,6 +166,12 @@ class MainWindow(QMainWindow):
         _zoom_shortcut("Ctrl+-", lambda: self._viewport.zoom_by(1.0 / 1.25))
         _zoom_shortcut("Ctrl+0", self._viewport.reset_zoom)
 
+        # Play/pause is independent of sync mode (videos can appear unsynced too).
+        play_pause = QShortcut(QKeySequence("P"), self)
+        play_pause.setContext(Qt.ShortcutContext.WindowShortcut)
+        play_pause.activated.connect(self._viewport.toggle_playback)
+        self._play_pause_shortcut = play_pause
+
         toggle = QShortcut(QKeySequence(Qt.Key.Key_QuoteLeft), self)
         toggle.setContext(Qt.ShortcutContext.WindowShortcut)
         toggle.activated.connect(self._toggle_panel_focus)
@@ -194,6 +200,7 @@ class MainWindow(QMainWindow):
         enabled = sync and not nav_focus and not text
         for sc in self._figure_nav_shortcuts:
             sc.setEnabled(enabled)
+        self._play_pause_shortcut.setEnabled(not nav_focus and not text)
 
     def _toggle_navigator(self) -> None:
         if self._navigator.is_open():

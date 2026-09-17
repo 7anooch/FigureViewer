@@ -29,6 +29,7 @@ def shortcut_entries() -> list[tuple[str, str]]:
         ("` / " + f"{mod}+D", "Show / hide directory navigator"),
         ("← / →", "Previous / next figure"),
         ("Space", "Next figure"),
+        ("P", "Play / pause all video panels"),
         (f"{mod}+← / {mod}+→", "First / last figure"),
         ("↑ / ↓", "Move in directory list (when navigator open)"),
         ("← / →", "Up / into folder (when navigator open)"),

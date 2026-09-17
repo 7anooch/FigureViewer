@@ -73,6 +73,9 @@ def render_figure(
     trim_whitespace_margins: bool = False,
 ) -> None:
     suffix = path.suffix.lower()
+    if suffix == ".mp4":
+        st.video(str(path))
+        return
     if suffix == ".pdf" and pdf_mode == "Embedded viewer":
         if trim_whitespace_margins:
             st.caption("Whitespace trim applies to Rasterize mode only.")

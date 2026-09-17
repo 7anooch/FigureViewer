@@ -100,6 +100,19 @@ def category_position(ref: FigureRef, playlist: list[FigureRef], *, group_mode: 
     return pos, len(same)
 
 
+def first_index_for_category(
+    playlist: list[FigureRef],
+    category_key: str,
+    *,
+    group_mode: GroupMode,
+) -> int | None:
+    """Index of the first playlist figure belonging to ``category_key``, or None."""
+    for index, ref in enumerate(playlist):
+        if ref.category_key(group_mode) == category_key:
+            return index
+    return None
+
+
 def filter_by_path_prefix(playlist: list[FigureRef], prefix: Path | None) -> list[FigureRef]:
     """Keep figures whose relative path lies under prefix (directory segments only)."""
     if prefix is None or not prefix.parts:

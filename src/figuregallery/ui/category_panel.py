@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtCore import QEvent, Qt, QTimer, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -17,12 +18,21 @@ from PyQt6.QtWidgets import (
 from figuregallery.directory_tree import filter_by_directory_exclusions
 from figuregallery.models import Category, FigureRef
 
+_UNAVAILABLE_FG = QBrush(QColor("#999999"))
+
 
 def visible_category_refs(category: Category, excluded: set[Path]) -> list[FigureRef]:
     refs = category.displayable_refs
     if not excluded:
         return refs
     return filter_by_directory_exclusions(refs, excluded)
+
+
+def category_is_available(category: Category, excluded: set[Path]) -> bool:
+    """True when the category has at least one displayable figure after dir exclusions."""
+    if not category.is_selectable:
+        return False
+    return bool(visible_category_refs(category, excluded))
 
 
 def category_list_label(category: Category, excluded: set[Path]) -> str:
@@ -36,6 +46,7 @@ def category_list_label(category: Category, excluded: set[Path]) -> str:
 
 class CategoryPanel(QWidget):
     selection_changed = pyqtSignal()
+    category_activated = pyqtSignal(str)
     focus_figure_requested = pyqtSignal()
     open_root_picker_requested = pyqtSignal()
 
@@ -45,6 +56,7 @@ class CategoryPanel(QWidget):
         self._selected: set[str] = set()
         self._filter_text = ""
         self._excluded_dirs: set[Path] = set()
+        self._hide_unavailable = False
 
         self._filter = QLineEdit()
         self._filter.setPlaceholderText("Filter categories…")
@@ -55,6 +67,7 @@ class CategoryPanel(QWidget):
         self._list = QListWidget()
         self._list.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._list.itemChanged.connect(self._on_item_changed)
+        self._list.viewport().installEventFilter(self)
         # Jump to filter without leaving the categories pane (/ is typed in the filter itself).
         focus_filter = QShortcut(QKeySequence("/"), self._list)
         focus_filter.setContext(Qt.ShortcutContext.WidgetShortcut)
@@ -93,21 +106,88 @@ class CategoryPanel(QWidget):
     def set_categories(self, categories: dict[str, Category], *, preserve_selection: set[str] | None = None) -> None:
         self._categories = categories
         if preserve_selection is not None:
-            self._selected = {k for k in preserve_selection if k in categories and categories[k].is_selectable}
+            self._selected = {
+                k
+                for k in preserve_selection
+                if k in categories and category_is_available(categories[k], self._excluded_dirs)
+            }
         else:
-            self._selected = {k for k in self._selected if k in categories and categories[k].is_selectable}
+            self._prune_unavailable_selection()
+        self._rebuild_list()
+
+    def apply_scan(
+        self,
+        categories: dict[str, Category],
+        excluded: set[Path],
+        *,
+        select_all: bool = False,
+        preserve_selection: set[str] | None = None,
+    ) -> None:
+        """Atomically replace categories + directory exclusions after a scan."""
+        self._categories = categories
+        self._excluded_dirs = set(excluded)
+        if select_all:
+            self._selected = {
+                key
+                for key, category in categories.items()
+                if category_is_available(category, self._excluded_dirs)
+            }
+        elif preserve_selection is not None:
+            self._selected = {
+                key
+                for key in preserve_selection
+                if key in categories and category_is_available(categories[key], self._excluded_dirs)
+            }
+        else:
+            self._prune_unavailable_selection()
         self._rebuild_list()
 
     def set_excluded_directories(self, excluded: set[Path]) -> None:
-        """Update labels/summary for Directories… exclusions (does not change selection)."""
+        """Update labels/summary for Directories… exclusions; drop empty selections."""
         new_excluded = set(excluded)
         if new_excluded == self._excluded_dirs:
             return
         self._excluded_dirs = new_excluded
+        pruned = self._prune_unavailable_selection()
         self._rebuild_list()
+        if pruned:
+            self.selection_changed.emit()
+
+    def set_hide_unavailable(self, hide: bool) -> None:
+        """When True, omit empty categories; when False, show them grayed out."""
+        hide = bool(hide)
+        if hide == self._hide_unavailable:
+            return
+        self._hide_unavailable = hide
+        self._rebuild_list()
+
+    def hide_unavailable(self) -> bool:
+        return self._hide_unavailable
 
     def selected_keys(self) -> set[str]:
         return set(self._selected)
+
+    def select_all_available(self) -> None:
+        """Select every category that currently has figures under the dir filter."""
+        self._selected = {
+            key
+            for key, category in self._categories.items()
+            if self._is_available(category)
+        }
+        self._rebuild_list()
+        self.selection_changed.emit()
+
+    def select_key(self, key: str) -> bool:
+        """Ensure ``key`` is selected if available. Returns True when selection changed."""
+        category = self._categories.get(key)
+        if category is None or not self._is_available(category):
+            return False
+        if key in self._selected:
+            return False
+        self._selected.add(key)
+        self._rebuild_list()
+        self.selection_changed.emit()
+        return True
 
     def clear(self) -> None:
         self._categories = {}
@@ -129,11 +209,50 @@ class CategoryPanel(QWidget):
         focus = QApplication.focusWidget()
         return focus is self._list or focus is self._filter
 
+    def eventFilter(self, obj, event) -> bool:  # noqa: ANN001
+        # Label click → jump to first figure. Must not rebuild synchronously (PyQt6 abort on macOS).
+        if obj is self._list.viewport() and event.type() == QEvent.Type.MouseButtonRelease:
+            try:
+                if event.button() == Qt.MouseButton.LeftButton:
+                    pos = event.position().toPoint()
+                    item = self._list.itemAt(pos)
+                    if item is not None and not self._is_checkbox_click(item, pos):
+                        key = item.data(Qt.ItemDataRole.UserRole)
+                        if isinstance(key, str):
+                            category = self._categories.get(key)
+                            if category is not None and self._is_available(category):
+                                QTimer.singleShot(0, lambda k=key: self.category_activated.emit(k))
+            except Exception:
+                pass
+        return super().eventFilter(obj, event)
+
+    def _is_checkbox_click(self, item: QListWidgetItem, pos) -> bool:  # noqa: ANN001
+        if not (item.flags() & Qt.ItemFlag.ItemIsUserCheckable):
+            return False
+        # Fixed left strip ≈ indicator; avoids fragile SE_ItemViewItemCheckIndicator geometry.
+        indicator = self._list.style().pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth, None, self._list)
+        margin = self._list.style().pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin, None, self._list)
+        strip = max(24, indicator + margin * 2 + 8)
+        rect = self._list.visualItemRect(item)
+        return pos.x() <= rect.left() + strip
+
     def _visible_refs(self, category: Category) -> list[FigureRef]:
         return visible_category_refs(category, self._excluded_dirs)
 
+    def _is_available(self, category: Category) -> bool:
+        return category_is_available(category, self._excluded_dirs)
+
     def _category_label(self, category: Category) -> str:
         return category_list_label(category, self._excluded_dirs)
+
+    def _prune_unavailable_selection(self) -> bool:
+        before = set(self._selected)
+        self._selected = {
+            k
+            for k in self._selected
+            if k in self._categories and self._is_available(self._categories[k])
+        }
+        return self._selected != before
 
     def _on_filter_changed(self, text: str) -> None:
         self._filter_text = text.strip().lower()
@@ -152,27 +271,35 @@ class CategoryPanel(QWidget):
         self._list.clear()
 
         keys = sorted(self._categories.keys(), key=str.lower)
-        visible = 0
+        listed = 0
+        unavailable_total = 0
         restore_row = -1
         for key in keys:
             if self._filter_text and self._filter_text not in key.lower():
                 continue
-            visible += 1
             category = self._categories[key]
+            available = self._is_available(category)
+            if not available:
+                unavailable_total += 1
+                if self._hide_unavailable:
+                    continue
+            listed += 1
             item = QListWidgetItem(self._category_label(category))
             item.setData(Qt.ItemDataRole.UserRole, key)
-            flags = (
-                Qt.ItemFlag.ItemIsEnabled
-                | Qt.ItemFlag.ItemIsSelectable
-                | Qt.ItemFlag.ItemIsUserCheckable
-            )
-            if not category.is_selectable:
-                flags = Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-            item.setFlags(flags)
-            if category.is_selectable:
+            if available:
+                item.setFlags(
+                    Qt.ItemFlag.ItemIsEnabled
+                    | Qt.ItemFlag.ItemIsSelectable
+                    | Qt.ItemFlag.ItemIsUserCheckable
+                )
                 item.setCheckState(
                     Qt.CheckState.Checked if key in self._selected else Qt.CheckState.Unchecked
                 )
+            else:
+                # Gray out and keep non-checkable (never leave a ticked empty category).
+                item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                item.setForeground(_UNAVAILABLE_FG)
+                item.setToolTip("No figures in the currently included directories")
             self._list.addItem(item)
             if preserve_key is not None and key == preserve_key:
                 restore_row = self._list.count() - 1
@@ -181,15 +308,19 @@ class CategoryPanel(QWidget):
         figure_count = sum(len(self._visible_refs(self._categories[k])) for k in self._selected)
         if not self._categories:
             self._summary.setText("No categories")
-        elif self._excluded_dirs:
-            self._summary.setText(
-                f"{visible} categories · {selected_count} selected · {figure_count} figures "
-                f"(dirs filtered)"
-            )
         else:
-            self._summary.setText(
-                f"{visible} categories · {selected_count} selected · {figure_count} figures"
-            )
+            parts = [
+                f"{listed} categories",
+                f"{selected_count} selected",
+                f"{figure_count} figures",
+            ]
+            if self._excluded_dirs:
+                parts.append("dirs filtered")
+            if unavailable_total and self._hide_unavailable:
+                parts.append(f"{unavailable_total} empty hidden")
+            elif unavailable_total:
+                parts.append(f"{unavailable_total} empty")
+            self._summary.setText(" · ".join(parts))
         self._list.blockSignals(False)
         if restore_row >= 0:
             self._list.setCurrentRow(restore_row)
@@ -213,7 +344,7 @@ class CategoryPanel(QWidget):
             if not isinstance(key, str):
                 continue
             category = self._categories.get(key)
-            if category is not None and category.is_selectable and self._visible_refs(category):
+            if category is not None and self._is_available(category):
                 keys.add(key)
         return keys
 
@@ -233,7 +364,7 @@ class CategoryPanel(QWidget):
         if not isinstance(key, str):
             return
         category = self._categories.get(key)
-        if category is None:
+        if category is None or not self._is_available(category):
             return
 
         if item.checkState() == Qt.CheckState.Checked:

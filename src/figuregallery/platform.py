@@ -46,6 +46,23 @@ def configure_qt_plugins() -> None:
     os.environ["QT_PLUGIN_PATH"] = str(plugins)
 
 
+def warn_if_bad_qt_macos_cursor() -> None:
+    """Qt 6.11.0/6.11.1 can abort on macOS when widgets set the I-beam cursor (QTBUG-147602)."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from PyQt6.QtCore import QT_VERSION_STR
+    except ImportError:
+        return
+    if QT_VERSION_STR in {"6.11.0", "6.11.1"}:
+        print(
+            f"warning: Qt {QT_VERSION_STR} on macOS can crash when focusing text fields "
+            "(Directories… search, etc.; QTBUG-147602). "
+            "Upgrade with: conda install -n figviewer -c conda-forge 'qt6-main>=6.11.2'",
+            file=sys.stderr,
+        )
+
+
 def reveal_in_file_manager(path: Path) -> None:
     path = path.expanduser().resolve()
     if sys.platform == "darwin":

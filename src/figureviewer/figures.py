@@ -5,10 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List
 
-from figurecommon.exts import FIGURE_EXTS
+from figurecommon.exts import DISPLAYABLE_EXTS, FIGURE_EXTS
 from figurecommon.sort import natural_key
 
 __all__ = [
+    "DISPLAYABLE_EXTS",
     "FIGURE_EXTS",
     "PanelConfig",
     "common_stems",
@@ -29,10 +30,11 @@ class PanelConfig:
 
 
 def list_figures(directory: Path, recursive: bool = False) -> List[Path]:
+    """List still figures and videos (``.mp4``) in natural order."""
     if not directory.exists() or not directory.is_dir():
         return []
     iterator = directory.rglob("*") if recursive else directory.iterdir()
-    files = [p for p in iterator if p.is_file() and p.suffix.lower() in FIGURE_EXTS]
+    files = [p for p in iterator if p.is_file() and p.suffix.lower() in DISPLAYABLE_EXTS]
     return sorted(files, key=lambda p: natural_key(str(p.relative_to(directory))))
 
 

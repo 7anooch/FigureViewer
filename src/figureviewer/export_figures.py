@@ -10,6 +10,7 @@ from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
+from figurecommon.exts import is_video_path
 from figureviewer.display_state import ViewportSnapshot
 from figureviewer.figures import PanelConfig
 from figureviewer.render import load_figure_bytes
@@ -94,6 +95,21 @@ def resolve_export_cell_width(
 def load_figure_as_image(path: Path, *, pdf_dpi: int, trim: bool = False) -> Image.Image:
     data = load_figure_bytes(str(path), pdf_dpi=pdf_dpi, trim=trim)
     return Image.open(BytesIO(data)).convert("RGB")
+
+
+def _video_placeholder_image(width: int = 400, height: int = 240) -> Image.Image:
+    """Gray stand-in so PNG export keeps layout when a panel is a video."""
+    image = Image.new("RGB", (width, height), (225, 225, 225))
+    draw = ImageDraw.Draw(image)
+    font = _title_font(size=18)
+    _draw_centered_text(
+        draw,
+        "Video (not exported)",
+        (0, 0, width, height),
+        font=font,
+        fill=(90, 90, 90),
+    )
+    return image
 
 
 def _safe_filename(value: str) -> str:
@@ -268,6 +284,9 @@ def export_viewport_snapshot(
     for path in snapshot.figure_paths:
         if path is None:
             images.append(None)
+            continue
+        if is_video_path(path):
+            images.append(_video_placeholder_image())
             continue
         images.append(
             load_figure_as_image(path, pdf_dpi=pdf_dpi, trim=trim_whitespace_margins)

@@ -79,3 +79,16 @@ def save_last_root(path: Path) -> None:
     recent.insert(0, key)
     data["recent_roots"] = recent[:_RECENT_ROOTS_MAX]
     _save_settings(data)
+
+
+def load_hide_unavailable_categories() -> bool:
+    return bool(_load_settings().get("hide_unavailable_categories", False))
+
+
+def save_hide_unavailable_categories(hide: bool) -> None:
+    data = _load_settings()
+    value = bool(hide)
+    if data.get("hide_unavailable_categories") == value:
+        return
+    data["hide_unavailable_categories"] = value
+    _save_settings(data)

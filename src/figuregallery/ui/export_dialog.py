@@ -64,7 +64,10 @@ class ExportPdfDialog(QDialog):
         self._path_preview.setWordWrap(True)
         self._path_preview.setStyleSheet("color: #555;")
 
-        summary = QLabel(f"Export {len(refs)} figure{'s' if len(refs) != 1 else ''} (one per page).")
+        summary = QLabel(
+            f"Export {len(refs)} figure{'s' if len(refs) != 1 else ''} "
+            "(one figure-sized page each)."
+        )
 
         form = QFormLayout()
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)

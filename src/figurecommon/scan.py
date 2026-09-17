@@ -21,6 +21,7 @@ DEFAULT_SKIP_DIR_NAMES = frozenset({
 class ScanOptions:
     follow_gitignore: bool = True
     include_pdf: bool = True
+    include_video: bool = True
 
 
 def _load_gitignore_patterns(root: Path) -> list[str]:
@@ -82,7 +83,11 @@ def walk_figures(root: Path, options: ScanOptions | None = None) -> Iterator[Pat
                 if should_skip_dir(entry, options):
                     continue
                 yield from walk(entry)
-            elif entry.is_file() and is_figure_path(entry, include_pdf=options.include_pdf):
+            elif entry.is_file() and is_figure_path(
+                entry,
+                include_pdf=options.include_pdf,
+                include_video=options.include_video,
+            ):
                 yield entry.resolve()
 
     yield from walk(root)

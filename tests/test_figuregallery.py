@@ -162,6 +162,65 @@ def test_directory_exclusions(tmp_path: Path) -> None:
     assert maximal_exclusions(checked) == {Path("run_a/cond2")}
 
 
+def test_prune_directory_exclusions_after_rescan(tmp_path: Path) -> None:
+    from figuregallery.directory_tree import prune_directory_exclusions
+
+    old_excluded = {Path("run_a/cond2"), Path("gone"), Path("run_b")}
+    refs = [
+        _ref(tmp_path, "run_a/cond1/plot.png"),
+        _ref(tmp_path, "run_a/cond2/plot.png"),
+        _ref(tmp_path, "run_b/cond1/plot.png"),
+    ]
+    pruned = prune_directory_exclusions(old_excluded, refs)
+    assert pruned == {Path("run_a/cond2"), Path("run_b")}
+    assert prune_directory_exclusions(old_excluded, []) == set()
+
+
+def test_directory_filter_tree_follows_scan_not_category_subset(tmp_path: Path) -> None:
+    """Directories… must use the full current scan tree, not a category-shrunk leftover."""
+    from figuregallery.directory_tree import build_filter_display_tree
+    from figuregallery.index import build_scan_index
+    from PIL import Image
+
+    root_a = tmp_path / "exp_a"
+    root_b = tmp_path / "exp_b"
+    for root, folders in (
+        (root_a, ["old_branch/cond1", "old_branch/cond2"]),
+        (root_b, ["new_branch/x", "other_top/y"]),
+    ):
+        for folder in folders:
+            dest = root / folder
+            dest.mkdir(parents=True)
+            Image.new("RGB", (4, 4)).save(dest / "plot.png")
+
+    index_a = build_scan_index(root_a)
+    index_b = build_scan_index(root_b)
+
+    def collect(nodes):
+        found: set[str] = set()
+        for node in nodes:
+            if node.name:
+                found.add(node.name)
+            found.update(v.name for v in node.fan_variants if v.name)
+            found |= collect(node.children)
+        return found
+
+    # Category-only subset (old behavior) can look like the previous root when stems match.
+    selected_only_b = [
+        ref for ref in index_b.refs if ref.is_displayable and ref.stem == "plot"
+    ]
+    # Full scan tree (new behavior) must not include the previous root's folders.
+    full_b = [ref for ref in index_b.refs if ref.is_displayable]
+    assert collect(build_filter_display_tree(full_b)) == collect(
+        build_filter_display_tree(selected_only_b)
+    )  # same files here, but names must be from root_b
+    names_b = collect(build_filter_display_tree(full_b))
+    names_a = collect(build_filter_display_tree([r for r in index_a.refs if r.is_displayable]))
+    assert "old_branch" in names_a
+    assert "old_branch" not in names_b
+    assert "new_branch" in names_b and "other_top" in names_b
+
+
 def test_list_figures_in_directory(tmp_path: Path) -> None:
     refs = [
         _ref(tmp_path, "run/a/plot.png"),
@@ -190,6 +249,113 @@ def test_playlist_includes_pdf(tmp_path: Path) -> None:
     pdf_only = Category(key="plot.pdf", refs=[refs[1]])
     assert pdf_only.is_selectable
     assert pdf_only.pdf_count == 1
+
+
+def test_first_index_for_category(tmp_path: Path) -> None:
+    from figuregallery.playlist import first_index_for_category
+
+    refs = [
+        _ref(tmp_path, "run_a/a.png"),
+        _ref(tmp_path, "run_b/a.png"),
+        _ref(tmp_path, "run_a/b.png"),
+    ]
+    categories = {
+        "a": Category(key="a", refs=[refs[0], refs[1]]),
+        "b": Category(key="b", refs=[refs[2]]),
+    }
+    playlist = build_playlist(
+        categories,
+        {"a", "b"},
+        SortMode.CATEGORY_THEN_PATH,
+        group_mode=GroupMode.STEM,
+    )
+    assert [r.filename for r in playlist] == ["a.png", "a.png", "b.png"]
+    assert first_index_for_category(playlist, "a", group_mode=GroupMode.STEM) == 0
+    assert first_index_for_category(playlist, "b", group_mode=GroupMode.STEM) == 2
+    assert first_index_for_category(playlist, "missing", group_mode=GroupMode.STEM) is None
+
+
+def test_scan_and_playlist_include_mp4(tmp_path: Path) -> None:
+    from figurecommon.exts import is_video_path
+
+    (tmp_path / "run").mkdir()
+    (tmp_path / "run" / "clip.mp4").write_bytes(b"not-a-real-video")
+    (tmp_path / "run" / "plot.png").write_bytes(b"x")
+    assert is_video_path(tmp_path / "run" / "clip.mp4")
+
+    found = list(walk_figures(tmp_path, ScanOptions()))
+    assert {p.name for p in found} == {"clip.mp4", "plot.png"}
+
+    # Optional include_video=False still skips mp4 (e.g. still-only scans).
+    no_video = list(walk_figures(tmp_path, ScanOptions(include_video=False)))
+    assert {p.name for p in no_video} == {"plot.png"}
+
+    index = build_scan_index(tmp_path, options=ScanOptions())
+    categories = group_refs(index.refs, GroupMode.STEM)
+    assert "clip" in categories
+    assert categories["clip"].is_selectable
+    playlist = build_playlist(
+        categories,
+        {"clip", "plot"},
+        SortMode.CATEGORY_THEN_PATH,
+        group_mode=GroupMode.STEM,
+    )
+    assert [r.filename for r in playlist] == ["clip.mp4", "plot.png"]
+
+
+def test_export_pdf_skips_videos(tmp_path: Path) -> None:
+    from figuregallery.export import export_playlist_pdf
+    from PIL import Image
+    import pytest
+
+    (tmp_path / "run").mkdir()
+    Image.new("RGB", (8, 8), color=(10, 20, 30)).save(tmp_path / "run" / "plot.png")
+    (tmp_path / "run" / "clip.mp4").write_bytes(b"x")
+    refs = [
+        _ref(tmp_path, "run/clip.mp4"),
+        _ref(tmp_path, "run/plot.png"),
+    ]
+    out = tmp_path / "gallery.pdf"
+    result = export_playlist_pdf(refs, out)
+    assert result.pages == 1
+    assert out.is_file()
+
+    video_only = [_ref(tmp_path, "run/clip.mp4")]
+    with pytest.raises(ValueError, match="video-only"):
+        export_playlist_pdf(video_only, tmp_path / "empty.pdf")
+
+
+def test_video_scrub_bar_only_while_playing(monkeypatch) -> None:
+    from figuregallery.platform import configure_qt_plugins
+    from figuregallery.ui.viewport import FigureViewport, _format_ms
+
+    assert _format_ms(0) == "0:00"
+    assert _format_ms(65_000) == "1:05"
+    assert _format_ms(3_661_000) == "1:01:01"
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    configure_qt_plugins()
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    vp = FigureViewport()
+    vp.show()
+    app.processEvents()
+    # Scrub lives on the video panel, which stays hidden for stills / empty state.
+    assert not vp._video_panel.isVisible()
+    assert vp._scrub.parentWidget() is vp._video_panel
+
+    vp._video_panel.show()
+    app.processEvents()
+    assert vp._scrub.isVisible()
+
+    vp._video_panel.hide()
+    app.processEvents()
+    assert not vp._scrub.isVisible()
+
+    vp.close()
+    vp.deleteLater()
+    app.processEvents()
 
 
 def test_symmetric_directory_fold(tmp_path: Path) -> None:
@@ -247,6 +413,14 @@ def test_export_filename_and_path_title(tmp_path: Path) -> None:
     assert result.pages == 2
     assert result.path.is_file()
     assert result.path.stat().st_size > 0
+
+    import fitz
+
+    with fitz.open(out) as doc:
+        assert len(doc) == 2
+        # Pages are sized to the figure pixels (8×8 PNG → 8×8 pt), not US Letter.
+        assert abs(doc[0].rect.width - 8.0) < 0.1
+        assert abs(doc[0].rect.height - 8.0) < 0.1
 
 
 def test_browse_pacing_expands_on_fast_nav_and_decays_when_idle(monkeypatch) -> None:
@@ -359,20 +533,70 @@ def test_root_picker_listing_and_navigation(tmp_path: Path) -> None:
 
 def test_category_label_reflects_directory_exclusions() -> None:
     """Category counts show visible/total when Directories… exclusions are active."""
-    from figuregallery.ui.category_panel import category_list_label
+    from figuregallery.ui.category_panel import category_is_available, category_list_label
 
     root = Path("/tmp/gallery_label_test")
     refs = [
         _ref(root, "keep/a.png"),
         _ref(root, "drop/a.png"),
         _ref(root, "keep/b.png"),
+        _ref(root, "drop/c.png"),
     ]
     cat_a = Category(key="a", refs=[refs[0], refs[1]])
     cat_b = Category(key="b", refs=[refs[2]])
+    cat_c = Category(key="c", refs=[refs[3]])
 
     assert category_list_label(cat_a, set()) == "a (2)"
     assert category_list_label(cat_a, {Path("drop")}) == "a (1/2)"
     assert category_list_label(cat_b, {Path("drop")}) == "b (1)"
+    assert category_list_label(cat_c, {Path("drop")}) == "c (0/1)"
+    assert category_is_available(cat_a, {Path("drop")})
+    assert category_is_available(cat_b, {Path("drop")})
+    assert not category_is_available(cat_c, {Path("drop")})
+
+
+def test_category_panel_grays_or_hides_unavailable(monkeypatch) -> None:
+    from figuregallery.platform import configure_qt_plugins
+    from figuregallery.ui.category_panel import CategoryPanel
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    configure_qt_plugins()
+    from PyQt6.QtCore import Qt
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    root = Path("/tmp/gallery_unavailable_test")
+    refs = [
+        _ref(root, "keep/a.png"),
+        _ref(root, "drop/c.png"),
+    ]
+    categories = {
+        "a": Category(key="a", refs=[refs[0]]),
+        "c": Category(key="c", refs=[refs[1]]),
+    }
+
+    panel = CategoryPanel()
+    panel.show()
+    panel.set_categories(categories, preserve_selection={"a", "c"})
+    assert panel.selected_keys() == {"a", "c"}
+
+    panel.set_excluded_directories({Path("drop")})
+    app.processEvents()
+    # Empty category is deselected and shown grayed (not checkable).
+    assert panel.selected_keys() == {"a"}
+    labels = [panel._list.item(i).text() for i in range(panel._list.count())]
+    assert labels == ["a (1)", "c (0/1)"]
+    empty_item = panel._list.item(1)
+    assert not (empty_item.flags() & Qt.ItemFlag.ItemIsUserCheckable)
+
+    panel.set_hide_unavailable(True)
+    app.processEvents()
+    labels = [panel._list.item(i).text() for i in range(panel._list.count())]
+    assert labels == ["a (1)"]
+
+    panel.close()
+    panel.deleteLater()
+    app.processEvents()
 
 
 def test_figure_file_mime_data_uses_source_url(tmp_path: Path) -> None:

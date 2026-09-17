@@ -275,6 +275,24 @@ def is_under_excluded_directory(ref: FigureRef, excluded: set[Path]) -> bool:
     return False
 
 
+def directory_prefixes_in_refs(refs: list[FigureRef]) -> set[Path]:
+    """Relative directory prefixes present in ``refs`` (parents of figure files)."""
+    return {Path(*parts) for parts in _all_directory_prefixes(refs)}
+
+
+def prune_directory_exclusions(
+    excluded: set[Path],
+    refs: list[FigureRef],
+) -> set[Path]:
+    """Drop exclusions that no longer exist in the current figure set."""
+    if not excluded:
+        return set()
+    valid = directory_prefixes_in_refs(refs)
+    if not valid:
+        return set()
+    return {path for path in excluded if path in valid}
+
+
 def maximal_exclusions(checked: dict[Path, bool]) -> set[Path]:
     excluded: set[Path] = set()
     paths = sorted((path for path in checked if path.parts), key=lambda path: len(path.parts))

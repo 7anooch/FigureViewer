@@ -5,9 +5,10 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from figuregallery.platform import configure_qt_plugins
+from figuregallery.platform import configure_qt_plugins, warn_if_bad_qt_macos_cursor
 
 configure_qt_plugins()
+warn_if_bad_qt_macos_cursor()
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication

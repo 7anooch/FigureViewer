@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from PyQt6.QtCore import QEvent, QPoint, Qt, QSize, QTimer, pyqtSignal
+from PyQt6.QtCore import QEvent, QPoint, QUrl, Qt, QSize, QTimer, pyqtSignal
 from PyQt6.QtGui import (
     QDrag,
     QImage,
@@ -14,14 +14,25 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QApplication,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from figuregallery.ui.figure_transfer import figure_file_mime_data
+
+try:
+    from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
+    from PyQt6.QtMultimediaWidgets import QVideoWidget
+
+    _HAS_MULTIMEDIA = True
+except ImportError:  # pragma: no cover
+    _HAS_MULTIMEDIA = False
 
 _MIN_ZOOM = 0.25
 _MAX_ZOOM = 8.0
@@ -29,10 +40,25 @@ _GESTURE_SUPPRESS_S = 0.35
 _ZOOM_HINT_FIT = (
     "Zoom: Fit  ·  pinch or ⌘/Ctrl+scroll to zoom  ·  drag out or ⌘/Ctrl+C to copy"
 )
+_VIDEO_HINT = (
+    "Video  ·  scrub to seek  ·  P or Pause to toggle  ·  ←/→ change figure"
+)
+
+
+def _format_ms(ms: int) -> str:
+    total_s = max(0, int(ms) // 1000)
+    hours, rem = divmod(total_s, 3600)
+    minutes, seconds = divmod(rem, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{seconds:02d}"
+    return f"{minutes}:{seconds:02d}"
 
 
 class FigureViewport(QWidget):
-    """Figure display with Finder-like pinch / scroll zoom and pan when zoomed."""
+    """Figure display with Finder-like pinch / scroll zoom and pan when zoomed.
+
+    Browse mode can also play ``.mp4`` via Qt Multimedia when available.
+    """
 
     zoom_hint_changed = pyqtSignal(str)
 
@@ -43,6 +69,8 @@ class FigureViewport(QWidget):
         self._drag_start: QPoint | None = None
         self._zoom = 1.0  # 1.0 = fit in view
         self._ignore_zoom_until = 0.0
+        self._video_active = False
+        self._scrubbing = False
 
         self._image_label = QLabel(alignment=Qt.AlignmentFlag.AlignCenter)
         self._image_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
@@ -63,28 +91,104 @@ class FigureViewport(QWidget):
         self._message_label.setStyleSheet("color: #666; font-size: 14px;")
         self._message_label.setTextFormat(Qt.TextFormat.PlainText)
 
+        self._video_panel, self._player, self._play_btn = self._build_video_panel()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.addWidget(self._scroll, stretch=1)
+        layout.addWidget(self._video_panel, stretch=1)
         layout.addWidget(self._message_label)
+        self._video_panel.hide()
 
         self.set_message("")
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    def _build_video_panel(self):
+        panel = QWidget()
+        panel.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(6)
+
+        play_btn = QPushButton("Pause")
+        play_btn.setFixedWidth(88)
+        play_btn.clicked.connect(self.toggle_playback)
+
+        self._position_label = QLabel("0:00")
+        self._position_label.setMinimumWidth(44)
+        self._position_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._duration_label = QLabel("0:00")
+        self._duration_label.setMinimumWidth(44)
+        self._duration_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self._scrub = QSlider(Qt.Orientation.Horizontal)
+        self._scrub.setRange(0, 0)
+        self._scrub.setSingleStep(1000)
+        self._scrub.setPageStep(5000)
+        self._scrub.setToolTip("Scrub video position")
+        self._scrub.sliderPressed.connect(self._on_scrub_pressed)
+        self._scrub.sliderReleased.connect(self._on_scrub_released)
+        self._scrub.sliderMoved.connect(self._on_scrub_moved)
+
+        player = None
+        if _HAS_MULTIMEDIA:
+            video_widget = QVideoWidget()
+            video_widget.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            video_widget.setMinimumHeight(120)
+            player = QMediaPlayer(self)
+            audio = QAudioOutput(self)
+            player.setAudioOutput(audio)
+            player.setVideoOutput(video_widget)
+            player.setLoops(QMediaPlayer.Loops.Infinite)
+            player.playbackStateChanged.connect(self._on_playback_state_changed)
+            player.positionChanged.connect(self._on_position_changed)
+            player.durationChanged.connect(self._on_duration_changed)
+            player.errorOccurred.connect(self._on_player_error)
+            panel_layout.addWidget(video_widget, stretch=1)
+        else:
+            missing = QLabel("Video playback requires Qt Multimedia.")
+            missing.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            missing.setStyleSheet("color: #666;")
+            panel_layout.addWidget(missing, stretch=1)
+
+        controls = QHBoxLayout()
+        controls.setSpacing(8)
+        controls.addWidget(play_btn)
+        controls.addWidget(self._position_label)
+        controls.addWidget(self._scrub, stretch=1)
+        controls.addWidget(self._duration_label)
+        panel_layout.addLayout(controls)
+        return panel, player, play_btn
+
+    @property
+    def is_showing_video(self) -> bool:
+        return self._video_active
+
     def focus_display(self) -> None:
         """Put keyboard focus on the figure surface (for nav / zoom shortcuts)."""
+        if self._video_active and self._video_panel.isVisible():
+            self._video_panel.setFocus(Qt.FocusReason.ShortcutFocusReason)
+            return
         if self._scroll.isVisible():
             self._scroll.setFocus(Qt.FocusReason.ShortcutFocusReason)
         else:
             self.setFocus(Qt.FocusReason.ShortcutFocusReason)
 
     def set_message(self, text: str, *, rich: bool = False) -> None:
+        self._stop_video()
         self._current_image = None
         self._source_path = None
         self._drag_start = None
         self._zoom = 1.0
         self._prepare_default_view()
         self._scroll.hide()
+        self._video_panel.hide()
         self._last_zoom_hint = None
         self.zoom_hint_changed.emit("")
         self._message_label.setTextFormat(
@@ -94,11 +198,13 @@ class FigureViewport(QWidget):
         self._message_label.show()
 
     def set_loading(self) -> None:
+        self._stop_video()
         self._current_image = None
         self._source_path = None
         self._drag_start = None
         self._zoom = 1.0
         self._prepare_default_view()
+        self._video_panel.hide()
         # Keep the scroll area shown so focus does not jump to the category filter.
         self._image_label.setText("Loading…")
         self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -110,11 +216,13 @@ class FigureViewport(QWidget):
         self._emit_zoom_hint(_ZOOM_HINT_FIT)
 
     def set_image(self, image: QImage, *, source_path: Path | None = None) -> None:
+        self._stop_video()
         self._suppress_zoom_gestures()
         self._current_image = image
         self._source_path = source_path
         self._drag_start = None
         self._zoom = 1.0
+        self._video_panel.hide()
         self._message_label.hide()
         self._prepare_default_view()
         self._scroll.show()
@@ -122,6 +230,101 @@ class FigureViewport(QWidget):
         # Scrollbars from the previous (zoomed) figure can shrink the viewport;
         # refit once layout settles so every figure truly fits the window.
         QTimer.singleShot(0, self._refit_if_default_zoom)
+
+    def set_video(self, path: Path) -> None:
+        """Show and autoplay a local video (looping)."""
+        resolved = path.expanduser().resolve()
+        if not _HAS_MULTIMEDIA or self._player is None:
+            self.set_message(
+                f"Cannot play video (Qt Multimedia unavailable):\n{resolved.name}"
+            )
+            return
+        self._suppress_zoom_gestures()
+        self._current_image = None
+        self._source_path = resolved
+        self._drag_start = None
+        self._zoom = 1.0
+        self._prepare_default_view()
+        self._scroll.hide()
+        self._message_label.hide()
+        self._video_panel.show()
+        self._video_active = True
+        self._scrubbing = False
+        self._reset_scrub(0, 0)
+        self._player.stop()
+        self._player.setSource(QUrl.fromLocalFile(str(resolved)))
+        self._player.play()
+        self._play_btn.setText("Pause")
+        self._emit_zoom_hint(_VIDEO_HINT)
+
+    def toggle_playback(self) -> None:
+        if not self._video_active or self._player is None:
+            return
+        if self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self._player.pause()
+        else:
+            self._player.play()
+
+    def _stop_video(self) -> None:
+        self._video_active = False
+        self._scrubbing = False
+        if self._player is not None:
+            self._player.stop()
+            self._player.setSource(QUrl())
+        self._play_btn.setText("Play")
+        self._reset_scrub(0, 0)
+        self._video_panel.hide()
+
+    def _reset_scrub(self, position_ms: int, duration_ms: int) -> None:
+        duration_ms = max(0, int(duration_ms))
+        position_ms = max(0, min(int(position_ms), duration_ms or 0))
+        self._scrub.blockSignals(True)
+        self._scrub.setRange(0, duration_ms)
+        self._scrub.setValue(position_ms)
+        self._scrub.blockSignals(False)
+        self._position_label.setText(_format_ms(position_ms))
+        self._duration_label.setText(_format_ms(duration_ms))
+
+    def _on_duration_changed(self, duration_ms: int) -> None:
+        if not self._video_active:
+            return
+        position = self._player.position() if self._player is not None else 0
+        self._reset_scrub(position, duration_ms)
+
+    def _on_position_changed(self, position_ms: int) -> None:
+        if not self._video_active or self._scrubbing:
+            return
+        self._scrub.blockSignals(True)
+        self._scrub.setValue(max(0, int(position_ms)))
+        self._scrub.blockSignals(False)
+        self._position_label.setText(_format_ms(position_ms))
+
+    def _on_scrub_pressed(self) -> None:
+        self._scrubbing = True
+
+    def _on_scrub_moved(self, position_ms: int) -> None:
+        self._position_label.setText(_format_ms(position_ms))
+        if self._player is not None and self._video_active:
+            self._player.setPosition(int(position_ms))
+
+    def _on_scrub_released(self) -> None:
+        if self._player is not None and self._video_active:
+            self._player.setPosition(int(self._scrub.value()))
+        self._scrubbing = False
+
+    def _on_playback_state_changed(self, state) -> None:  # noqa: ANN001
+        if not self._video_active:
+            return
+        playing = state == QMediaPlayer.PlaybackState.PlayingState
+        self._play_btn.setText("Pause" if playing else "Play")
+
+    def _on_player_error(self, error, message: str = "") -> None:  # noqa: ANN001
+        del error
+        if not self._video_active:
+            return
+        name = self._source_path.name if self._source_path else "video"
+        detail = message.strip() or "Playback failed"
+        self.set_message(f"Could not play {name}:\n{detail}")
 
     def copy_to_clipboard(self) -> bool:
         """Copy the current figure's source file to the clipboard. Returns True on success."""
