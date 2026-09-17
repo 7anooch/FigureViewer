@@ -9,6 +9,9 @@ dependencies:
   - pillow>=10
   - pymupdf
   # Avoid Qt 6.11.0/6.11.1: macOS cursor UAF crash (QTBUG-147602 / toCGImage).
+  # Focusing the Directories… search box (I-beam cursor) is a common trigger.
   - pyqt6>=6.4,!=6.11.0,!=6.11.1
+  - qt6-main!=6.11.0,!=6.11.1
+  - qt6-multimedia
   - pytest
   - pip

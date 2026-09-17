@@ -1,6 +1,32 @@
 # Figure Viewer
 
-A local Streamlit app for comparing corresponding figures across multiple folders.
+Compare corresponding figures across folders — Streamlit or a native desktop app (Compare + Browse).
+
+## macOS app (easiest)
+
+**Collaborator / one-shot setup** (needs conda; creates `figviewer` if missing, editable-installs, builds the thin `.app`):
+
+```bash
+git clone https://github.com/7anooch/FigureViewer
+cd FigureViewer
+./packaging/macos/bootstrap_install.sh
+open ~/Applications/Figure\ Viewer.app
+```
+
+Refresh deps from `environment.yaml` when they change: `./packaging/macos/bootstrap_install.sh --update-env`.
+
+**Already developing in `figviewer`?** Just rebuild the `.app`:
+
+```bash
+conda activate figviewer
+pip install -e .          # once / after packaging changes
+./packaging/macos/install_app.sh
+open ~/Applications/Figure\ Viewer.app
+```
+
+How macOS `.app` bundles work (thin launcher, bootstrap, frozen/portable): [`docs/macos-app-packaging.md`](docs/macos-app-packaging.md).
+
+(PyQt6 comes from conda-forge via `environment.yaml`.)
 
 ## Project layout
 
@@ -23,7 +49,7 @@ FigureViewer/
             └── viewport.py
 ```
 
-## Install
+## Install (conda / CLI)
 
 Create the conda environment (first time only):
 
@@ -111,6 +137,12 @@ PDFs:
 .pdf
 ```
 
+Videos (desktop Compare + Browse; autoplay / loop):
+
+```text
+.mp4
+```
+
 ## Display options
 
 - **Display size**
@@ -192,47 +224,15 @@ figuregallery /path/to/tree
 
 Switch modes anytime from the toolbar (one button for the other mode) or the **Mode** menu.
 
-### macOS app (Spotlight / Dock)
-
-**Collaborator / one-shot setup** (needs conda; creates `figviewer` if missing, editable-installs, builds the thin `.app`):
-
-```bash
-git clone <this-repo>
-cd FigureViewer
-./packaging/macos/bootstrap_install.sh
-open ~/Applications/Figure\ Viewer.app
-```
-
-Refresh deps from `environment.yaml` when they change: `./packaging/macos/bootstrap_install.sh --update-env`.
-
-**Already developing in `figviewer`?** Just rebuild the `.app`:
-
-```bash
-conda activate figviewer
-pip install -e .          # once / after packaging changes
-./packaging/macos/install_app.sh
-open ~/Applications/Figure\ Viewer.app
-```
-
-Optional custom logo (1024×1024 PNG):
-
-```bash
-./packaging/macos/bootstrap_install.sh --icon path/to/logo_1024.png
-# or: ./packaging/macos/install_app.sh --icon path/to/logo_1024.png
-```
-
-Logo idea prompts: [`packaging/macos/LOGO_PROMPTS.md`](packaging/macos/LOGO_PROMPTS.md).
-
-How macOS `.app` bundles work (thin launcher, bootstrap, frozen/portable): [`docs/macos-app-packaging.md`](docs/macos-app-packaging.md).
-
-(PyQt6 comes from conda-forge via `environment.yaml`.)
+Compare mode also plays **`.mp4`** inline (loop, muted). **P** or any panel’s Pause button toggles playback on **all** video panels together; each panel keeps its own scrub bar.
 
 Browse mode:
 
 - Scan a root directory; categories appear in a sidebar with counts.
 - Select one or more categories and scroll through all matching figures.
+- **Videos (`.mp4`)** play inline (loop) with a scrub bar; **P** or Pause toggles playback.
 - Path shown relative to root; **Open enclosing folder** (`Cmd+E` / `Ctrl+E`).
-- **Export PDF…** (`Cmd+P` / `Ctrl+P`) writes the current playlist as one figure per page with a path title.
+- **Export PDF…** (`Cmd+P` / `Ctrl+P`) stacks the current playlist into a multi-page PDF (one figure-sized page each; videos are skipped).
 - Toggle **Stem** vs **Filename** grouping; choose sort order **Category → Path** or **Path → Category**.
 - PDFs are rasterized (page 1) at a configurable DPI, with optional whitespace trim.
 
