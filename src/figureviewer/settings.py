@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
 _CONFIG_DIR = Path.home() / ".config" / "figureviewer"
 _CONFIG_FILE = _CONFIG_DIR / "settings.json"
+_SAVE_WARNED = False
 
 # Persisted across launches (beyond browse root).
 _STICKY_KEYS = (
@@ -19,18 +22,75 @@ _STICKY_KEYS = (
 )
 
 
+def _fallback_config_dirs() -> list[Path]:
+    home = Path.home()
+    dirs: list[Path] = []
+    if sys.platform == "darwin":
+        dirs.append(home / "Library" / "Application Support" / "FigureViewer")
+    dirs.append(home / ".figureviewer")
+    return dirs
+
+
+def _settings_candidates() -> list[Path]:
+    """Primary settings path first, then fallbacks (deduped)."""
+    seen: set[Path] = set()
+    out: list[Path] = []
+    for directory in [_CONFIG_DIR, *_fallback_config_dirs()]:
+        path = directory / "settings.json"
+        key = path
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
 def _load_settings() -> dict:
-    if not _CONFIG_FILE.is_file():
-        return {}
-    try:
-        return json.loads(_CONFIG_FILE.read_text())
-    except (json.JSONDecodeError, OSError):
-        return {}
+    for path in _settings_candidates():
+        if not path.is_file():
+            continue
+        try:
+            return json.loads(path.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+    return {}
+
+
+def _warn_save_failure(detail: str) -> None:
+    global _SAVE_WARNED
+    if _SAVE_WARNED:
+        return
+    _SAVE_WARNED = True
+    warnings.warn(
+        f"Could not save Figure Viewer settings ({detail}). "
+        "The app will run, but preferences may not persist. "
+        "Check ownership/permissions on ~/.config/figureviewer "
+        "(e.g. created by a different user or with sudo).",
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _save_settings(data: dict) -> None:
-    _CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    _CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n")
+    """Write settings.json; never raise — launch must not die on config permissions."""
+    global _CONFIG_DIR, _CONFIG_FILE
+    payload = json.dumps(data, indent=2) + "\n"
+    attempts: list[tuple[Path, Path]] = [(_CONFIG_DIR, _CONFIG_FILE)]
+    for directory in _fallback_config_dirs():
+        attempts.append((directory, directory / "settings.json"))
+
+    errors: list[str] = []
+    for directory, path in attempts:
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload)
+            _CONFIG_DIR = directory
+            _CONFIG_FILE = path
+            return
+        except OSError as exc:
+            errors.append(f"{path}: {exc}")
+            continue
+    _warn_save_failure("; ".join(errors) if errors else "no writable location")
 
 
 def _resolved_dir(path: Path | str) -> Path | None:

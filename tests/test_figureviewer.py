@@ -98,6 +98,110 @@ def test_viewport_snapshot_position_and_stem(tmp_path: Path) -> None:
     assert snap.figure_paths[0].name == "trial_002.png"
 
 
+def test_panel_index_cache_skips_directory_relist(tmp_path: Path, monkeypatch) -> None:
+    from figureviewer import display_state
+    from figureviewer.display_state import get_viewport_snapshot, invalidate_panel_index_cache
+
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    _png(left / "a.png")
+    _png(left / "b.png")
+    _png(right / "a.png")
+    _png(right / "b.png")
+
+    state = ViewerState(
+        panel_directories=[str(left), str(right)],
+        sync_mode=True,
+        match_by="position",
+        current_index=0,
+        columns_per_row=2,
+    )
+    calls = {"n": 0}
+    real = display_state.list_figures
+
+    def counting_list_figures(*args, **kwargs):
+        calls["n"] += 1
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(display_state, "list_figures", counting_list_figures)
+    invalidate_panel_index_cache()
+    assert get_viewport_snapshot(state) is not None
+    after_build = calls["n"]
+    assert after_build >= 2
+    assert get_viewport_snapshot(state, index=1) is not None
+    assert get_viewport_snapshot(state, index=0) is not None
+    assert calls["n"] == after_build  # synced flips must not re-scan directories
+
+    state["match_by"] = "filename stem"
+    assert get_viewport_snapshot(state) is not None
+    assert calls["n"] > after_build
+
+
+def test_compare_viewport_reuses_cells_on_synced_flip(tmp_path: Path) -> None:
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    from figuregallery.platform import configure_qt_plugins
+    from figureviewer.desktop.viewport import MultiPanelViewport
+    from figureviewer.display_state import ViewportSnapshot
+    from figureviewer.figures import panels_from_directories
+
+    configure_qt_plugins()
+    app = QApplication.instance() or QApplication([])
+
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    a_l, b_l = left / "a.png", left / "b.png"
+    a_r, b_r = right / "a.png", right / "b.png"
+    for p in (a_l, b_l, a_r, b_r):
+        _png(p)
+
+    panels = panels_from_directories([left, right])
+    snap0 = ViewportSnapshot(
+        panels=panels,
+        figure_paths=[a_l, a_r],
+        index=0,
+        total=2,
+        current_label="1",
+        columns_per_row=2,
+    )
+    snap1 = ViewportSnapshot(
+        panels=panels,
+        figure_paths=[b_l, b_r],
+        index=1,
+        total=2,
+        current_label="2",
+        columns_per_row=2,
+    )
+
+    vp = MultiPanelViewport()
+    img = QImage(8, 8, QImage.Format.Format_RGB32)
+    img.fill(0)
+    for path in (a_l, a_r, b_l, b_r):
+        vp._cache.put(path, img, pdf_dpi=200, trim=False)
+
+    vp.show_snapshot(snap0, sync_mode=True)
+    cells_before = list(vp._cells)
+    assert len(cells_before) == 2
+    vp.show_snapshot(snap1, sync_mode=True)
+    assert vp._cells == cells_before
+    assert vp._cells[0]._figure_path.resolve() == b_l.resolve()
+    assert vp._cells[1]._figure_path.resolve() == b_r.resolve()
+    vp.deleteLater()
+    assert app is not None
+
+
+def test_even_grid_columns_avoids_orphan_panel() -> None:
+    from figureviewer.desktop.viewport import even_grid_columns
+
+    assert even_grid_columns(3, 2) == 3  # not 2+1 half-width orphan
+    assert even_grid_columns(4, 2) == 2
+    assert even_grid_columns(3, 1) == 1
+    assert even_grid_columns(3, 3) == 3
+    assert even_grid_columns(5, 2) == 1
+    assert even_grid_columns(1, 2) == 1
+
+
 def test_list_figures_includes_mp4(tmp_path: Path) -> None:
     _png(tmp_path / "plot.png")
     (tmp_path / "clip.mp4").write_bytes(b"not-a-real-video")
@@ -617,3 +721,41 @@ def test_mode_controller_switches_compare_browse(tmp_path: Path, monkeypatch) ->
     controller.window.close()
     controller.window.deleteLater()
     app.processEvents()
+
+
+def test_settings_save_falls_back_when_primary_unwritable(tmp_path: Path, monkeypatch) -> None:
+    import figureviewer.settings as settings
+
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o500)  # readable/executable, not writable
+    fallback = tmp_path / "fallback"
+    monkeypatch.setattr(settings, "_CONFIG_DIR", blocked)
+    monkeypatch.setattr(settings, "_CONFIG_FILE", blocked / "settings.json")
+    monkeypatch.setattr(settings, "_fallback_config_dirs", lambda: [fallback])
+    monkeypatch.setattr(settings, "_SAVE_WARNED", False)
+
+    settings.save_desktop_mode("browse")
+    assert (fallback / "settings.json").is_file()
+    assert settings.load_desktop_mode() == "browse"
+    blocked.chmod(0o700)
+
+
+def test_settings_save_swallows_total_permission_failure(tmp_path: Path, monkeypatch) -> None:
+    import figureviewer.settings as settings
+
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    also_blocked = tmp_path / "also_blocked"
+    also_blocked.mkdir()
+    also_blocked.chmod(0o500)
+    monkeypatch.setattr(settings, "_CONFIG_DIR", blocked)
+    monkeypatch.setattr(settings, "_CONFIG_FILE", blocked / "settings.json")
+    monkeypatch.setattr(settings, "_fallback_config_dirs", lambda: [also_blocked])
+    monkeypatch.setattr(settings, "_SAVE_WARNED", False)
+
+    # Must not raise — launch path calls save_desktop_mode during ModeController init.
+    settings.save_desktop_mode("compare")
+    blocked.chmod(0o700)
+    also_blocked.chmod(0o700)

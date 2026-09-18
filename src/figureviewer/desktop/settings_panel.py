@@ -60,8 +60,13 @@ class SettingsPanel(QWidget):
         self._metadata.toggled.connect(lambda v: self._set("show_metadata", v))
 
         self._columns = QSpinBox()
-        self._columns.setRange(1, 4)
+        self._columns.setRange(1, 6)
         self._columns.setValue(int(state.get("columns_per_row", 2)))
+        self._columns.setToolTip(
+            "Preferred columns per row. When the panel count does not divide evenly "
+            "(e.g. 3 panels with 2 columns), Compare picks a nearby layout so every "
+            "panel stays the same size."
+        )
         self._columns.valueChanged.connect(lambda v: self._set("columns_per_row", int(v)))
 
         self._display_mode = QComboBox()

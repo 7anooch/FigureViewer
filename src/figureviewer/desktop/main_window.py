@@ -260,6 +260,9 @@ class MainWindow(QMainWindow):
         self._refresh_view()
 
     def _on_panels_changed(self) -> None:
+        from figureviewer.display_state import invalidate_panel_index_cache
+
+        invalidate_panel_index_cache()
         self._settings.refresh_panels()
         self._export.sync_default_dir()
         self._state["current_index"] = 0

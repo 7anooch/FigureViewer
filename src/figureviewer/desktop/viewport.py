@@ -48,6 +48,30 @@ _VIDEO_HINT = (
 )
 
 
+def even_grid_columns(panel_count: int, preferred: int) -> int:
+    """Choose a column count that fills a complete grid (no orphan half-width panel).
+
+    With preferred=2 and 3 panels, a 2+1 layout leaves the third cell half-width.
+    Prefer the nearest divisor of ``panel_count`` (ties → more columns for side-by-side).
+    """
+    n = max(int(panel_count), 0)
+    if n <= 1:
+        return 1
+    preferred = max(1, min(int(preferred), n))
+    if n % preferred == 0:
+        return preferred
+    best = 1
+    best_key = (abs(1 - preferred), -1)  # distance, then prefer larger cols
+    for cand in range(1, n + 1):
+        if n % cand != 0:
+            continue
+        key = (abs(cand - preferred), -cand)
+        if key < best_key:
+            best = cand
+            best_key = key
+    return best
+
+
 def _format_ms(ms: int) -> str:
     total_s = max(0, int(ms) // 1000)
     hours, rem = divmod(total_s, 3600)
@@ -66,6 +90,8 @@ class _PanelCell(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(80, 120)
         self._title = QLabel()
         self._title.setWordWrap(True)
         self._title.setStyleSheet("font-weight: 600;")
@@ -517,10 +543,14 @@ class MultiPanelViewport(QWidget):
         self._zoom = 1.0
         self._ignore_zoom_until = 0.0
         self._last_zoom_hint: str | None = None
+        self._layout_key: tuple[int, int, bool] | None = None
 
         self._grid = QGridLayout()
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setSpacing(6)
         inner = QWidget()
         inner.setLayout(self._grid)
+        inner.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setWidget(inner)
@@ -635,6 +665,7 @@ class MultiPanelViewport(QWidget):
 
     def show_message(self, text: str, *, rich: bool = False) -> None:
         self._clear_cells()
+        self._layout_key = None
         self._prefetch_queue = []
         self._zoom = 1.0
         self._empty.setTextFormat(
@@ -647,17 +678,44 @@ class MultiPanelViewport(QWidget):
 
     def show_snapshot(self, snapshot: ViewportSnapshot, *, sync_mode: bool = True) -> None:
         self._empty.hide()
-        # Cells are destroyed below — remember if keyboard focus lived in this viewport
+        # Cells may be destroyed below — remember if keyboard focus lived in this viewport
         # so ←/→ (WidgetWithChildrenShortcut) keep working after the flip.
         fw = QApplication.focusWidget()
         restore_keyboard = fw is not None and (fw is self or self.isAncestorOf(fw))
-        self._clear_cells()
         self._suppress_zoom_gestures()
         self._zoom = 1.0
-        self._prefetch_queue = []
         self._panel_count = max(len(snapshot.panels), 1)
         self._apply_browse_budget()
-        cols = max(snapshot.columns_per_row, 1)
+
+        layout_key = (
+            len(snapshot.panels),
+            even_grid_columns(len(snapshot.panels), max(snapshot.columns_per_row, 1)),
+            sync_mode,
+        )
+        reuse = (
+            self._layout_key == layout_key
+            and len(self._cells) == len(snapshot.panels)
+            and bool(snapshot.panels)
+        )
+        if reuse:
+            self._update_snapshot_cells(snapshot, sync_mode=sync_mode)
+        else:
+            self._rebuild_snapshot_cells(snapshot, sync_mode=sync_mode)
+            self._layout_key = layout_key
+
+        self._load_next()
+        QTimer.singleShot(0, self._refit_cells)
+        self._emit_zoom_hint()
+        if restore_keyboard:
+            QTimer.singleShot(0, self.focus_display)
+
+    def _rebuild_snapshot_cells(self, snapshot: ViewportSnapshot, *, sync_mode: bool) -> None:
+        self._clear_cells()
+        self._prefetch_queue = []
+        n = len(snapshot.panels)
+        cols = even_grid_columns(n, max(snapshot.columns_per_row, 1))
+        rows = max(1, (n + cols - 1) // cols) if n else 1
+        self._apply_grid_stretches(rows, cols)
         self._pending = []
         for i, (panel, path) in enumerate(zip(snapshot.panels, snapshot.figure_paths)):
             cell = _PanelCell()
@@ -667,44 +725,101 @@ class MultiPanelViewport(QWidget):
             row, col = divmod(i, cols)
             self._grid.addWidget(cell, row, col)
             self._cells.append(cell)
-            if path is None:
-                cell.set_title(panel.label)
-                cell.set_message("No matching figure in this panel.")
-                continue
-            cell.set_figure_path(path)
-            cell.set_title(f"{panel.label}  ·  {path.name}")
-            if not sync_mode:
-                from figureviewer.figures import list_figures
+            self._bind_local_slider(cell, panel, path, sync_mode=sync_mode)
+            self._populate_cell(cell, i, panel, path)
 
-                figs = list_figures(panel.directory, recursive=False)
-                cell._local_slider.setVisible(True)
-                cell._local_slider.setMaximum(max(len(figs) - 1, 0))
-                key = f"local_idx_{panel.label}_{panel.directory.resolve()}"
-                cell._local_slider.blockSignals(True)
+    def _apply_grid_stretches(self, rows: int, cols: int) -> None:
+        """Give every row/column equal weight so panels share the viewport evenly."""
+        # Clear previous stretch beyond the new geometry (Qt keeps old indices otherwise).
+        for c in range(max(cols + 1, 6)):
+            self._grid.setColumnStretch(c, 1 if c < cols else 0)
+            self._grid.setColumnMinimumWidth(c, 0)
+        for r in range(max(rows + 1, 6)):
+            self._grid.setRowStretch(r, 1 if r < rows else 0)
+            self._grid.setRowMinimumHeight(r, 0)
+
+    def _update_snapshot_cells(self, snapshot: ViewportSnapshot, *, sync_mode: bool) -> None:
+        """Synced flips: keep panel widgets, only swap figure content."""
+        self._prefetch_queue = []
+        self._pending = []
+        for i, (panel, path) in enumerate(zip(snapshot.panels, snapshot.figure_paths)):
+            cell = self._cells[i]
+            if not sync_mode:
+                self._bind_local_slider(cell, panel, path, sync_mode=False)
+            else:
+                cell._local_slider.hide()
+            self._populate_cell(cell, i, panel, path)
+
+    def _bind_local_slider(
+        self,
+        cell: _PanelCell,
+        panel,
+        path: Path | None,
+        *,
+        sync_mode: bool,
+    ) -> None:
+        # Disconnect prior handlers so reused cells do not stack connections.
+        try:
+            cell._local_slider.valueChanged.disconnect()
+        except TypeError:
+            pass
+        if sync_mode:
+            cell._local_slider.hide()
+            return
+        from figureviewer.figures import list_figures
+
+        figs = list_figures(panel.directory, recursive=False)
+        cell._local_slider.setVisible(True)
+        cell._local_slider.setMaximum(max(len(figs) - 1, 0))
+        key = f"local_idx_{panel.label}_{panel.directory.resolve()}"
+        cell._local_slider.blockSignals(True)
+        try:
+            if path is not None:
                 try:
                     local_val = figs.index(path)
                 except ValueError:
                     resolved = {str(p.resolve()): idx for idx, p in enumerate(figs)}
                     local_val = resolved.get(str(path.resolve()), 0)
-                cell._local_slider.setValue(local_val)
-                cell._local_slider.blockSignals(False)
-                cell._local_slider.valueChanged.connect(
-                    lambda value, k=key: self.local_index_changed.emit(k, int(value))
-                )
-            if is_video_path(path):
-                cell.set_video(path)
-                continue
-            cached = self._cache.get(path, pdf_dpi=self._pdf_dpi, trim=self._trim)
-            if cached is not None:
-                self._apply_image(cell, cached)
             else:
-                cell.set_loading()
-                self._pending.append((i, path))
-        self._load_next()
-        QTimer.singleShot(0, self._refit_cells)
-        self._emit_zoom_hint()
-        if restore_keyboard:
-            QTimer.singleShot(0, self.focus_display)
+                local_val = 0
+        finally:
+            cell._local_slider.setValue(local_val)
+            cell._local_slider.blockSignals(False)
+        cell._local_slider.valueChanged.connect(
+            lambda value, k=key: self.local_index_changed.emit(k, int(value))
+        )
+
+    def _populate_cell(
+        self,
+        cell: _PanelCell,
+        index: int,
+        panel,
+        path: Path | None,
+    ) -> None:
+        if path is None:
+            cell.set_title(panel.label)
+            cell.set_message("No matching figure in this panel.")
+            return
+
+        cell.set_title(f"{panel.label}  ·  {path.name}")
+        same_path = (
+            cell._figure_path is not None
+            and path.resolve() == cell._figure_path.resolve()
+        )
+        cell.set_figure_path(path)
+
+        if is_video_path(path):
+            if same_path and cell.is_showing_video:
+                return
+            cell.set_video(path)
+            return
+
+        cached = self._cache.get(path, pdf_dpi=self._pdf_dpi, trim=self._trim)
+        if cached is not None:
+            self._apply_image(cell, cached)
+            return
+        cell.set_loading()
+        self._pending.append((index, path))
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)

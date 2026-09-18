@@ -497,6 +497,26 @@ def test_settings_recent_roots_mru_dedupe_and_cap(tmp_path: Path, monkeypatch) -
     assert recent.count(roots[5].resolve()) == 1
 
 
+def test_gallery_settings_save_survives_permission_error(tmp_path: Path, monkeypatch) -> None:
+    import figuregallery.settings as settings
+
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o500)
+    fallback = tmp_path / "fallback"
+    monkeypatch.setattr(settings, "_CONFIG_DIR", blocked)
+    monkeypatch.setattr(settings, "_CONFIG_FILE", blocked / "settings.json")
+    monkeypatch.setattr(settings, "_fallback_config_dirs", lambda: [fallback])
+    monkeypatch.setattr(settings, "_SAVE_WARNED", False)
+
+    root = tmp_path / "data"
+    root.mkdir()
+    settings.save_last_root(root)
+    assert (fallback / "settings.json").is_file()
+    assert settings.load_last_root() == root.resolve()
+    blocked.chmod(0o700)
+
+
 def test_root_picker_listing_and_navigation(tmp_path: Path) -> None:
     from figuregallery.ui.root_picker import (
         child_directories,
