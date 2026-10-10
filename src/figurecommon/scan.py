@@ -57,8 +57,17 @@ def should_skip_dir(path: Path, options: ScanOptions) -> bool:
     return False
 
 
-def walk_figures(root: Path, options: ScanOptions | None = None) -> Iterator[Path]:
-    """Yield absolute paths to figure files under root."""
+def walk_figures(
+    root: Path,
+    options: ScanOptions | None = None,
+    *,
+    should_cancel=None,
+) -> Iterator[Path]:
+    """Yield absolute paths to figure files under root.
+
+    ``should_cancel`` is an optional zero-arg callable; when it returns true,
+    iteration stops early (for cancellable background scans).
+    """
     options = options or ScanOptions()
     root = root.expanduser().resolve()
     if not root.is_dir():
@@ -67,12 +76,16 @@ def walk_figures(root: Path, options: ScanOptions | None = None) -> Iterator[Pat
     gitignore_patterns = _load_gitignore_patterns(root) if options.follow_gitignore else []
 
     def walk(current: Path) -> Iterator[Path]:
+        if should_cancel is not None and should_cancel():
+            return
         try:
             entries = sorted(current.iterdir(), key=lambda p: p.name.lower())
         except OSError:
             return
 
         for entry in entries:
+            if should_cancel is not None and should_cancel():
+                return
             if entry.name.startswith("."):
                 continue
             rel = entry.relative_to(root).as_posix()

@@ -37,7 +37,7 @@ def shortcut_entries() -> list[tuple[str, str]]:
         ("↑ / ↓", "Move in category or root-picker list"),
         ("← / →", "Root picker: up directory / drill into folder"),
         ("Enter", "Root picker: open selected as scan root"),
-        ("Esc", "Close root picker"),
+        ("Esc", "Close root picker / cancel in-progress scan"),
         ("Tab", "Root picker: Nearby ↔ Recent"),
         (f"{mod}+← / {mod}+→", "First / last figure"),
         ("Space / Enter", "Next figure (or toggle category when list focused)"),

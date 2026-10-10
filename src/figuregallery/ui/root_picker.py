@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, pyqtSignal
@@ -19,7 +20,11 @@ _PATH_ROLE = Qt.ItemDataRole.UserRole
 
 
 def child_directories(parent: Path) -> list[Path]:
-    """Return sorted child directories of parent; empty on error."""
+    """Return sorted child directories of parent; empty on error.
+
+    Uses ``os.scandir`` (cheap ``d_type`` dir checks when the FS provides them)
+    and skips ``resolve()`` per child so huge folders stay snappy while navigating.
+    """
     try:
         resolved = parent.expanduser().resolve()
     except OSError:
@@ -28,12 +33,16 @@ def child_directories(parent: Path) -> list[Path]:
         return []
     kids: list[Path] = []
     try:
-        for entry in resolved.iterdir():
-            try:
-                if entry.is_dir() and not entry.name.startswith("."):
-                    kids.append(entry.resolve())
-            except OSError:
-                continue
+        with os.scandir(resolved) as it:
+            for entry in it:
+                name = entry.name
+                if name.startswith("."):
+                    continue
+                try:
+                    if entry.is_dir(follow_symlinks=False):
+                        kids.append(Path(entry.path))
+                except OSError:
+                    continue
     except OSError:
         return []
     kids.sort(key=lambda p: p.name.lower())
@@ -112,8 +121,9 @@ class RootPicker(QWidget):
         self._recent.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._recent.itemDoubleClicked.connect(self._commit_recent_item)
 
-        hint = QLabel("Enter open · Esc close · Tab recent")
+        hint = QLabel("Enter open root · → into · ← up · Esc close · Tab recent")
         hint.setStyleSheet("color: #888; font-size: 11px;")
+        hint.setWordWrap(True)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -137,6 +147,7 @@ class RootPicker(QWidget):
             sc.setContext(Qt.ShortcutContext.WidgetShortcut)
             sc.activated.connect(slot)
 
+        # Enter opens the selected folder as scan root; → drills into it.
         for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             _sc(key, self._commit_current, self._nearby)
             _sc(key, self._commit_current, self._recent)
@@ -260,8 +271,8 @@ class RootPicker(QWidget):
             return
         new_parent, new_sel = drill_into(self._selected_path)
         if new_parent == self._list_parent and new_sel == self._selected_path:
-            # Already as deep as we can go — hand focus back to categories.
-            self.close_picker()
+            # Leaf folder: → opens it as the scan root.
+            self._commit_current()
             return
         self._list_parent = new_parent
         self._selected_path = new_sel

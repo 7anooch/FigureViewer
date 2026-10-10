@@ -33,7 +33,7 @@ def shortcut_entries() -> list[tuple[str, str]]:
         (f"{mod}+← / {mod}+→", "First / last figure"),
         ("↑ / ↓", "Move in directory list (when navigator open)"),
         ("← / →", "Up / into folder (when navigator open)"),
-        ("Enter / Space", "Add / remove folder as panel (navigator)"),
+        ("Enter / Space", "Toggle folder as panel (navigator)"),
         ("Esc", "Close directory navigator"),
         (f"{mod}+E", "Reveal current figure in Finder"),
         (f"Pinch / {mod}+scroll", "Zoom all panels"),

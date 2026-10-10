@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+from PyQt6 import sip
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QAction, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
@@ -28,7 +29,6 @@ from figurecommon.scan import ScanOptions
 from figuregallery.browse_pacing import BrowsePacing
 from figuregallery.cache import ImageCache
 from figuregallery.grouping import group_index, remap_selection
-from figuregallery.index import build_scan_index
 from figuregallery.models import Category, FigureRef, GroupMode, ScanIndex, SortMode
 from figuregallery.platform import reveal_in_file_manager
 from figuregallery.playlist import (
@@ -54,6 +54,7 @@ from figuregallery.ui.loader import FigureLoader
 from figuregallery.ui.nav_controls import NavControls
 from figuregallery.ui.path_bar import PathBar
 from figuregallery.ui.root_picker import RootPicker
+from figuregallery.ui.scan_worker import ScanWorker
 from figuregallery.ui.viewport import FigureViewport
 
 DEFAULT_PDF_DPI = 200
@@ -96,6 +97,10 @@ class MainWindow(QMainWindow):
         self._prefetch = FigureLoader()
         self._prefetch.loaded.connect(self._on_prefetch_loaded)
         self._prefetch.failed.connect(self._on_prefetch_failed)
+        self._scan_worker: ScanWorker | None = None
+        self._scan_progress: QProgressDialog | None = None
+        self._scan_started_at = 0.0
+        self._scan_generation = 0
         self._idle_timer = QTimer(self)
         self._idle_timer.setInterval(2000)
         self._idle_timer.timeout.connect(self._on_idle_tick)
@@ -109,7 +114,9 @@ class MainWindow(QMainWindow):
         self._status.showMessage(shortcuts_help_text(for_console=False).replace("\n", "  ·  "), 12000)
 
         if initial_root is not None:
-            self._scan_root(initial_root)
+            # Defer until the event loop is running so the progress dialog and
+            # queued worker signals are not delivered during construction.
+            QTimer.singleShot(0, lambda root=initial_root: self._scan_root(root))
 
     def _build_toolbar(self) -> None:
         toolbar = QToolBar("Main")
@@ -365,52 +372,165 @@ class MainWindow(QMainWindow):
         self._scan_root(self._scan_index.root)
 
     def _scan_root(self, root: Path) -> None:
-        previous_root = self._scan_index.root if self._scan_index is not None else None
-        started = time.perf_counter()
+        """Start a cancellable background scan so huge trees do not freeze the UI."""
         try:
-            index = build_scan_index(root, options=ScanOptions())
-        except Exception as exc:
+            resolved = root.expanduser().resolve()
+        except OSError as exc:
             QMessageBox.critical(self, "Scan failed", str(exc))
             return
+        if not resolved.is_dir():
+            QMessageBox.critical(self, "Scan failed", f"Not a directory:\n{resolved}")
+            return
 
-        elapsed = time.perf_counter() - started
-        root_changed = previous_root is None or previous_root != index.root
-        self._scan_index = index
-        save_last_root(index.root)
-        self._path_filter = None
-        self._clear_this_folder_only()
-        # Drop playlist cache so Directories… cannot reopen against a prior scan.
-        self._base_playlist = []
-        self._playlist = []
-        if root_changed:
-            self._excluded_dirs = set()
-        else:
-            # Same root rescan: keep exclusions that still exist in the new tree.
-            self._excluded_dirs = prune_directory_exclusions(self._excluded_dirs, index.refs)
-        self._categories = group_index(index, self._group_mode)
-        if root_changed:
-            # Do not keep category names across roots — shared stems make Directories…
-            # look like the previous experiment's tree.
-            self._category_panel.apply_scan(
-                self._categories,
-                self._excluded_dirs,
-                select_all=True,
+        self._cancel_scan(silent=True)
+        generation = self._scan_generation
+
+        self._scan_started_at = time.perf_counter()
+        progress = QProgressDialog(f"Scanning\n{resolved}", "Cancel", 0, 0, self)
+        progress.setWindowTitle("Scanning figures…")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(300)
+        progress.setValue(0)
+        # Auto-close on finish would emit canceled and race the finish slot.
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.canceled.connect(lambda: self._cancel_scan(silent=False))
+        self._scan_progress = progress
+
+        worker = ScanWorker(resolved, options=ScanOptions(), parent=self)
+        worker.progress.connect(lambda n, g=generation: self._on_scan_progress(g, n))
+        worker.finished_ok.connect(lambda idx, g=generation: self._on_scan_finished(g, idx))
+        worker.failed.connect(lambda msg, g=generation: self._on_scan_failed(g, msg))
+        worker.cancelled.connect(lambda g=generation: self._on_scan_cancelled(g))
+        self._scan_worker = worker
+        self._status.showMessage(f"Scanning {resolved}…")
+        worker.start()
+
+    def _dispose_scan_progress(self) -> None:
+        progress = self._scan_progress
+        self._scan_progress = None
+        if progress is None or sip.isdeleted(progress):
+            return
+        try:
+            progress.canceled.disconnect()
+        except TypeError:
+            pass
+        try:
+            progress.hide()
+            progress.reset()
+            progress.deleteLater()
+        except RuntimeError:
+            pass
+
+    def _cancel_scan(self, silent: bool = False) -> None:
+        # Invalidate any already-queued progress/finish callbacks first.
+        self._scan_generation += 1
+        worker = self._scan_worker
+        self._scan_worker = None
+        if worker is not None and not sip.isdeleted(worker):
+            for signal in (
+                worker.progress,
+                worker.finished_ok,
+                worker.failed,
+                worker.cancelled,
+            ):
+                try:
+                    signal.disconnect()
+                except TypeError:
+                    pass
+            if worker.isRunning():
+                worker.requestInterruption()
+                # Bounded wait: avoid leaving a zombie thread on rapid re-scan.
+                worker.wait(1500)
+            worker.deleteLater()
+        self._dispose_scan_progress()
+        if not silent:
+            self._status.showMessage("Scan cancelled", 3000)
+
+    def _on_scan_progress(self, generation: int, count: int) -> None:
+        if generation != self._scan_generation:
+            return
+        progress = self._scan_progress
+        if progress is None or sip.isdeleted(progress):
+            return
+        try:
+            progress.setLabelText(
+                f"Found {count} figures…\n(Cancel to pick a deeper folder instead)"
             )
-        else:
-            self._category_panel.apply_scan(
-                self._categories,
-                self._excluded_dirs,
-                preserve_selection=self._category_panel.selected_keys(),
+        except RuntimeError:
+            return
+
+    def _release_scan_worker(self) -> None:
+        worker = self._scan_worker
+        self._scan_worker = None
+        if worker is not None and not sip.isdeleted(worker):
+            worker.deleteLater()
+
+    def _on_scan_cancelled(self, generation: int) -> None:
+        if generation != self._scan_generation:
+            return
+        self._release_scan_worker()
+        self._dispose_scan_progress()
+        self._status.showMessage("Scan cancelled", 3000)
+
+    def _on_scan_failed(self, generation: int, message: str) -> None:
+        if generation != self._scan_generation:
+            return
+        self._release_scan_worker()
+        self._dispose_scan_progress()
+        QMessageBox.critical(self, "Scan failed", message)
+
+    def _on_scan_finished(self, generation: int, index: object) -> None:
+        if generation != self._scan_generation:
+            return
+        if not isinstance(index, ScanIndex):
+            return
+        self._release_scan_worker()
+        self._dispose_scan_progress()
+
+        try:
+            previous_root = self._scan_index.root if self._scan_index is not None else None
+            elapsed = time.perf_counter() - self._scan_started_at
+            root_changed = previous_root is None or previous_root != index.root
+            self._scan_index = index
+            save_last_root(index.root)
+            self._path_filter = None
+            self._clear_this_folder_only()
+            # Drop playlist cache so Directories… cannot reopen against a prior scan.
+            self._base_playlist = []
+            self._playlist = []
+            if root_changed:
+                self._excluded_dirs = set()
+            else:
+                # Same root rescan: keep exclusions that still exist in the new tree.
+                self._excluded_dirs = prune_directory_exclusions(self._excluded_dirs, index.refs)
+            self._categories = group_index(index, self._group_mode)
+            if root_changed:
+                # Do not keep category names across roots — shared stems make Directories…
+                # look like the previous experiment's tree.
+                self._category_panel.apply_scan(
+                    self._categories,
+                    self._excluded_dirs,
+                    select_all=True,
+                )
+            else:
+                self._category_panel.apply_scan(
+                    self._categories,
+                    self._excluded_dirs,
+                    preserve_selection=self._category_panel.selected_keys(),
+                )
+            self._root_label.setText(f"Root: {index.root}")
+            pdf_count = sum(1 for r in index.refs if r.absolute_path.suffix.lower() == ".pdf")
+            other = len(index.refs) - pdf_count
+            self._status.showMessage(
+                f"Scanned {len(index.refs)} figures ({other} images, {pdf_count} pdf) in {elapsed:.1f}s",
+                5000,
             )
-        self._root_label.setText(f"Root: {index.root}")
-        pdf_count = sum(1 for r in index.refs if r.absolute_path.suffix.lower() == ".pdf")
-        other = len(index.refs) - pdf_count
-        self._status.showMessage(
-            f"Scanned {len(index.refs)} figures ({other} images, {pdf_count} pdf) in {elapsed:.1f}s",
-            5000,
-        )
-        self._rebuild_playlist(reset_index=True)
-        self._viewport.focus_display()
+            self._rebuild_playlist(reset_index=True)
+            self._viewport.focus_display()
+        except Exception as exc:
+            # Uncaught slot exceptions abort the process under PyQt6.
+            QMessageBox.critical(self, "Scan failed", str(exc))
 
     def _on_dpi_changed(self, value: int) -> None:
         stepped = MIN_PDF_DPI + ((value - MIN_PDF_DPI) // PDF_DPI_STEP) * PDF_DPI_STEP

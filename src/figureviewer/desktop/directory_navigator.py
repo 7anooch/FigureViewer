@@ -43,7 +43,7 @@ class DirectoryNavigator(QWidget):
 
     Hidden by default so it does not steal vertical space from the figure grid.
     Mirrors Gallery’s RootPicker navigation (↑↓ ←→ Enter Esc), but Enter/Space
-    toggles panel membership instead of replacing a scan root.
+    toggles panel membership instead of replacing a scan root. → drills; Enter does not.
     """
 
     panels_changed = pyqtSignal()
@@ -93,7 +93,7 @@ class DirectoryNavigator(QWidget):
         self._apply_manual = QPushButton("Apply manual paths")
         self._apply_manual.clicked.connect(self._apply_manual_paths)
 
-        hint = QLabel("Enter/Space toggle panel · ←/→ up/into · Esc close · ` figures")
+        hint = QLabel("Enter/Space toggle panel · → into · ← up · Esc close · ` figures")
         hint.setStyleSheet("color: #888; font-size: 11px;")
         hint.setWordWrap(True)
 
@@ -122,9 +122,12 @@ class DirectoryNavigator(QWidget):
             sc.setContext(Qt.ShortcutContext.WidgetShortcut)
             sc.activated.connect(slot)
 
-        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+        # Enter/Space toggle panel; → drills into the folder.
+        for key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             _sc(key, self._toggle_current, self._nearby)
             _sc(key, self._toggle_current, self._recent)
+        _sc(Qt.Key.Key_Space, self._toggle_current, self._nearby)
+        _sc(Qt.Key.Key_Space, self._toggle_current, self._recent)
         _sc(Qt.Key.Key_Left, self._go_up, self._nearby)
         _sc(Qt.Key.Key_Right, self._go_into, self._nearby)
         esc = QShortcut(QKeySequence(Qt.Key.Key_Escape), self)
@@ -292,6 +295,8 @@ class DirectoryNavigator(QWidget):
             return
         new_parent, new_sel = drill_into(self._selected_path)
         if new_parent == self._list_parent and new_sel == self._selected_path:
+            # Leaf folder: → toggles panel membership.
+            self._toggle_current()
             return
         self._list_parent = new_parent
         self._selected_path = new_sel

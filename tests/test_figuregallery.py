@@ -551,6 +551,32 @@ def test_root_picker_listing_and_navigation(tmp_path: Path) -> None:
     assert up_sel == a.resolve()
 
 
+def test_build_scan_index_respects_cancel(tmp_path: Path) -> None:
+    from figuregallery.index import ScanCancelled, build_scan_index
+
+    for i in range(120):
+        (tmp_path / f"f{i:03d}.png").write_bytes(b"x")
+
+    calls = {"n": 0}
+
+    def cancel_after_progress() -> bool:
+        return calls["n"] >= 50
+
+    def on_progress(n: int) -> None:
+        calls["n"] = n
+
+    try:
+        build_scan_index(
+            tmp_path,
+            should_cancel=cancel_after_progress,
+            on_progress=on_progress,
+        )
+        raise AssertionError("expected ScanCancelled")
+    except ScanCancelled:
+        pass
+    assert calls["n"] >= 50
+
+
 def test_category_label_reflects_directory_exclusions() -> None:
     """Category counts show visible/total when Directories… exclusions are active."""
     from figuregallery.ui.category_panel import category_is_available, category_list_label
