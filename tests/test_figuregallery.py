@@ -162,6 +162,70 @@ def test_directory_exclusions(tmp_path: Path) -> None:
     assert maximal_exclusions(checked) == {Path("run_a/cond2")}
 
 
+def test_directory_include_exception_under_exclusion(tmp_path: Path) -> None:
+    """Re-checking a subdir under an excluded parent includes only that branch."""
+    from figuregallery.directory_tree import (
+        build_filter_display_tree,
+        collect_directory_filter,
+        initial_checked_state,
+    )
+
+    refs = [
+        _ref(tmp_path, "run_a/cond1/plot.png"),
+        _ref(tmp_path, "run_a/cond2/plot.png"),
+        _ref(tmp_path, "run_b/cond1/plot.png"),
+    ]
+    filtered = filter_by_directory_exclusions(
+        refs, {Path("run_a")}, {Path("run_a/cond1")}
+    )
+    assert [str(r.relative_path) for r in filtered] == [
+        "run_a/cond1/plot.png",
+        "run_b/cond1/plot.png",
+    ]
+
+    display = build_filter_display_tree(refs)
+    checked = initial_checked_state(display, set())
+    # Uncheck run_a, then re-check only its cond1 fan-variant (parent stays excluded).
+    for node in display:
+        if node.name != "run_a":
+            continue
+        checked[id(node)] = False
+        for child in node.children:
+            for variant in child.fan_variants:
+                checked[id(variant)] = variant.name == "cond1"
+            if child.exclusion_prefixes:
+                checked[id(child)] = False
+    excluded, included = collect_directory_filter(display, checked)
+    assert Path("run_a") in excluded
+    assert included == {Path("run_a/cond1")}
+    assert filter_by_directory_exclusions(refs, excluded, included) == filtered
+
+    # Round-trip checkbox state from the stored rules.
+    restored = initial_checked_state(display, excluded, included)
+    for node in display:
+        if node.name != "run_a":
+            continue
+        assert restored[id(node)] is False
+        for child in node.children:
+            for variant in child.fan_variants:
+                assert restored[id(variant)] is (variant.name == "cond1")
+
+
+def test_directory_reexclude_under_include_exception(tmp_path: Path) -> None:
+    """A deeper exclusion can carve out part of a re-included subtree."""
+    refs = [
+        _ref(tmp_path, "run_a/keep/ok/plot.png"),
+        _ref(tmp_path, "run_a/keep/drop/plot.png"),
+        _ref(tmp_path, "run_a/other/plot.png"),
+    ]
+    filtered = filter_by_directory_exclusions(
+        refs,
+        {Path("run_a"), Path("run_a/keep/drop")},
+        {Path("run_a/keep")},
+    )
+    assert [str(r.relative_path) for r in filtered] == ["run_a/keep/ok/plot.png"]
+
+
 def test_prune_directory_exclusions_after_rescan(tmp_path: Path) -> None:
     from figuregallery.directory_tree import prune_directory_exclusions
 

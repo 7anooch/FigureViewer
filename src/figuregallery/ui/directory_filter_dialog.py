@@ -21,7 +21,7 @@ from figuregallery.directory_tree import (
     FilterNode,
     FilterNodeKind,
     build_filter_display_tree,
-    collect_exclusions,
+    collect_directory_filter,
     filter_by_directory_exclusions,
     initial_checked_state,
 )
@@ -38,6 +38,7 @@ class DirectoryFilterDialog(QDialog):
         refs: list[FigureRef],
         excluded: set[Path],
         *,
+        included: set[Path] | None = None,
         hide_unavailable_categories: bool = False,
         scan_root: Path | None = None,
         parent=None,
@@ -52,7 +53,10 @@ class DirectoryFilterDialog(QDialog):
         self._scan_root = scan_root
         self._display_nodes = build_filter_display_tree(self._refs)
         self._initial_excluded = set(excluded)
-        self._checked: dict[int, bool] = initial_checked_state(self._display_nodes, excluded)
+        self._initial_included = set() if included is None else set(included)
+        self._checked: dict[int, bool] = initial_checked_state(
+            self._display_nodes, excluded, self._initial_included
+        )
         self._block_changes = False
         # Next Fold press collapses one depth; flips to expand after fully collapsed.
         self._fold_collapsing = True
@@ -62,8 +66,10 @@ class DirectoryFilterDialog(QDialog):
         self._filter_timer.timeout.connect(self._apply_filter_now)
 
         intro = QLabel(
-            "Uncheck directories to hide their figures. When branches share the same layout, "
-            "top-level variants (e.g. A, B) are listed once with shared subdirectories below."
+            "Uncheck directories to hide their figures. Re-check a subdirectory under an "
+            "excluded parent to include only that branch. When branches share the same "
+            "layout, top-level variants (e.g. A, B) are listed once with shared "
+            "subdirectories below."
         )
         intro.setWordWrap(True)
         if scan_root is not None:
@@ -138,28 +144,48 @@ class DirectoryFilterDialog(QDialog):
         # Plain-Python snapshots filled in accept() so callers never touch Qt
         # widgets after exec() returns (PyQt6 aborts on "C++ object deleted").
         self._accepted_excluded: set[Path] | None = None
+        self._accepted_included: set[Path] | None = None
         self._accepted_hide_unavailable: bool | None = None
 
     def accept(self) -> None:
         try:
-            self._accepted_excluded = set(self.excluded_directories())
+            excluded, included = self.directory_filter()
+            self._accepted_excluded = set(excluded)
+            self._accepted_included = set(included)
             self._accepted_hide_unavailable = bool(self.hide_unavailable_categories())
         except Exception:
             self._accepted_excluded = set()
+            self._accepted_included = set()
             self._accepted_hide_unavailable = bool(self._hide_unavailable.isChecked())
         super().accept()
 
+    def directory_filter(self) -> tuple[set[Path], set[Path]]:
+        return collect_directory_filter(self._display_nodes, self._checked)
+
     def excluded_directories(self) -> set[Path]:
-        return collect_exclusions(self._display_nodes, self._checked)
+        excluded, _included = self.directory_filter()
+        return excluded
+
+    def included_directories(self) -> set[Path]:
+        _excluded, included = self.directory_filter()
+        return included
 
     def hide_unavailable_categories(self) -> bool:
         return self._hide_unavailable.isChecked()
 
-    def accepted_result(self) -> tuple[set[Path], bool] | None:
-        """Return (excluded, hide_unavailable) captured at accept(), else None."""
-        if self._accepted_excluded is None or self._accepted_hide_unavailable is None:
+    def accepted_result(self) -> tuple[set[Path], set[Path], bool] | None:
+        """Return (excluded, included, hide_unavailable) captured at accept(), else None."""
+        if (
+            self._accepted_excluded is None
+            or self._accepted_included is None
+            or self._accepted_hide_unavailable is None
+        ):
             return None
-        return set(self._accepted_excluded), bool(self._accepted_hide_unavailable)
+        return (
+            set(self._accepted_excluded),
+            set(self._accepted_included),
+            bool(self._accepted_hide_unavailable),
+        )
 
     def _populate_tree(self) -> None:
         self._block_changes = True
@@ -275,13 +301,18 @@ class DirectoryFilterDialog(QDialog):
 
     def _update_summary(self) -> None:
         try:
-            excluded = self.excluded_directories()
-            visible = len(filter_by_directory_exclusions(self._refs, excluded))
+            excluded, included = self.directory_filter()
+            visible = len(filter_by_directory_exclusions(self._refs, excluded, included))
             if excluded:
                 noun = "directories" if len(excluded) != 1 else "directory"
-                self._summary.setText(
-                    f"Showing {visible} of {len(self._refs)} figures · {len(excluded)} {noun} excluded"
+                text = (
+                    f"Showing {visible} of {len(self._refs)} figures · "
+                    f"{len(excluded)} {noun} excluded"
                 )
+                if included:
+                    inc_noun = "exceptions" if len(included) != 1 else "exception"
+                    text += f" · {len(included)} {inc_noun} re-included"
+                self._summary.setText(text)
             else:
                 self._summary.setText(f"Showing all {len(self._refs)} figures")
         except Exception:

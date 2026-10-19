@@ -39,7 +39,7 @@ from figuregallery.playlist import (
     list_figures_in_directory,
     preserve_position,
 )
-from figuregallery.directory_tree import filter_by_directory_exclusions, prune_directory_exclusions
+from figuregallery.directory_tree import filter_by_directory_exclusions, prune_directory_filter
 from figuregallery.export import export_playlist_pdf
 from figuregallery.settings import (
     load_hide_unavailable_categories,
@@ -83,6 +83,7 @@ class MainWindow(QMainWindow):
         self._playlist: list[FigureRef] = []
         self._path_filter: Path | None = None
         self._excluded_dirs: set[Path] = set()
+        self._included_dirs: set[Path] = set()
         self._hide_unavailable_categories = load_hide_unavailable_categories()
         self._this_folder_only = False
         self._this_folder_anchor: Path | None = None
@@ -501,9 +502,12 @@ class MainWindow(QMainWindow):
             self._playlist = []
             if root_changed:
                 self._excluded_dirs = set()
+                self._included_dirs = set()
             else:
-                # Same root rescan: keep exclusions that still exist in the new tree.
-                self._excluded_dirs = prune_directory_exclusions(self._excluded_dirs, index.refs)
+                # Same root rescan: keep filter paths that still exist in the new tree.
+                self._excluded_dirs, self._included_dirs = prune_directory_filter(
+                    self._excluded_dirs, self._included_dirs, index.refs
+                )
             self._categories = group_index(index, self._group_mode)
             if root_changed:
                 # Do not keep category names across roots — shared stems make Directories…
@@ -511,12 +515,14 @@ class MainWindow(QMainWindow):
                 self._category_panel.apply_scan(
                     self._categories,
                     self._excluded_dirs,
+                    included=self._included_dirs,
                     select_all=True,
                 )
             else:
                 self._category_panel.apply_scan(
                     self._categories,
                     self._excluded_dirs,
+                    included=self._included_dirs,
                     preserve_selection=self._category_panel.selected_keys(),
                 )
             self._root_label.setText(f"Root: {index.root}")
@@ -653,7 +659,9 @@ class MainWindow(QMainWindow):
                 self._this_folder_anchor,
             )
         else:
-            filtered = filter_by_directory_exclusions(self._base_playlist, self._excluded_dirs)
+            filtered = filter_by_directory_exclusions(
+                self._base_playlist, self._excluded_dirs, self._included_dirs
+            )
             self._playlist = filter_by_path_prefix(filtered, self._path_filter)
 
         if not self._playlist:
@@ -695,7 +703,15 @@ class MainWindow(QMainWindow):
         if self._this_folder_only and self._this_folder_anchor is not None:
             caption += f" · this folder only ({self._this_folder_anchor})"
         elif self._excluded_dirs:
-            caption += f" · {len(self._excluded_dirs)} dir{'s' if len(self._excluded_dirs) != 1 else ''} excluded"
+            caption += (
+                f" · {len(self._excluded_dirs)} dir"
+                f"{'s' if len(self._excluded_dirs) != 1 else ''} excluded"
+            )
+            if self._included_dirs:
+                caption += (
+                    f" · {len(self._included_dirs)} exception"
+                    f"{'s' if len(self._included_dirs) != 1 else ''}"
+                )
         if self._path_filter is not None:
             caption += f" · filtered to {self._path_filter}"
         self._caption.setText(caption)
@@ -895,19 +911,22 @@ class MainWindow(QMainWindow):
             dialog = DirectoryFilterDialog(
                 refs,
                 self._excluded_dirs,
+                included=self._included_dirs,
                 hide_unavailable_categories=self._hide_unavailable_categories,
                 scan_root=scan_root,
                 parent=self,
             )
-            result: tuple[set[Path], bool] | None = None
+            result: tuple[set[Path], set[Path], bool] | None = None
             try:
                 if dialog.exec() == QDialog.DialogCode.Accepted:
                     # Prefer snapshot taken in accept() — never call into dialog
                     # widgets after exec() (Qt 6.11 + PyQt can already be tearing down).
                     result = dialog.accepted_result()
                     if result is None:
+                        excluded, included = dialog.directory_filter()
                         result = (
-                            set(dialog.excluded_directories()),
+                            set(excluded),
+                            set(included),
                             bool(dialog.hide_unavailable_categories()),
                         )
             finally:
@@ -916,28 +935,35 @@ class MainWindow(QMainWindow):
             if result is None:
                 return
 
-            excluded, hide_unavailable = result
+            excluded, included, hide_unavailable = result
             # Apply outside this QAction stack so list/viewport rebuilds are not
             # nested under the toolbar click that opened the modal.
             QTimer.singleShot(
                 0,
-                lambda e=set(excluded), h=bool(hide_unavailable): self._apply_directory_filter_result(
-                    e, h
+                lambda e=set(excluded), i=set(included), h=bool(hide_unavailable): (
+                    self._apply_directory_filter_result(e, i, h)
                 ),
             )
         except Exception:
             return
 
     def _apply_directory_filter_result(
-        self, excluded: set[Path], hide_unavailable: bool
+        self,
+        excluded: set[Path],
+        included: set[Path],
+        hide_unavailable: bool,
     ) -> None:
         try:
             live_refs = self._refs_for_directory_filter()
-            self._excluded_dirs = prune_directory_exclusions(excluded, live_refs)
+            self._excluded_dirs, self._included_dirs = prune_directory_filter(
+                excluded, included, live_refs
+            )
             self._hide_unavailable_categories = hide_unavailable
             save_hide_unavailable_categories(self._hide_unavailable_categories)
             self._category_panel.set_hide_unavailable(self._hide_unavailable_categories)
-            self._category_panel.set_excluded_directories(self._excluded_dirs)
+            self._category_panel.set_excluded_directories(
+                self._excluded_dirs, self._included_dirs
+            )
             self._apply_playlist_filters(reset_index=False)
         except Exception as exc:
             self._status.showMessage(f"Directory filter apply failed: {exc}", 6000)

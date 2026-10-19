@@ -21,23 +21,35 @@ from figuregallery.models import Category, FigureRef
 _UNAVAILABLE_FG = QBrush(QColor("#999999"))
 
 
-def visible_category_refs(category: Category, excluded: set[Path]) -> list[FigureRef]:
+def visible_category_refs(
+    category: Category,
+    excluded: set[Path],
+    included: set[Path] | None = None,
+) -> list[FigureRef]:
     refs = category.displayable_refs
     if not excluded:
         return refs
-    return filter_by_directory_exclusions(refs, excluded)
+    return filter_by_directory_exclusions(refs, excluded, included)
 
 
-def category_is_available(category: Category, excluded: set[Path]) -> bool:
+def category_is_available(
+    category: Category,
+    excluded: set[Path],
+    included: set[Path] | None = None,
+) -> bool:
     """True when the category has at least one displayable figure after dir exclusions."""
     if not category.is_selectable:
         return False
-    return bool(visible_category_refs(category, excluded))
+    return bool(visible_category_refs(category, excluded, included))
 
 
-def category_list_label(category: Category, excluded: set[Path]) -> str:
+def category_list_label(
+    category: Category,
+    excluded: set[Path],
+    included: set[Path] | None = None,
+) -> str:
     """Sidebar label: ``key (n)`` or ``key (visible/total)`` when dirs are filtered."""
-    visible = len(visible_category_refs(category, excluded))
+    visible = len(visible_category_refs(category, excluded, included))
     total = category.count
     if excluded and visible != total:
         return f"{category.key} ({visible}/{total})"
@@ -56,6 +68,7 @@ class CategoryPanel(QWidget):
         self._selected: set[str] = set()
         self._filter_text = ""
         self._excluded_dirs: set[Path] = set()
+        self._included_dirs: set[Path] = set()
         self._hide_unavailable = False
 
         self._filter = QLineEdit()
@@ -109,7 +122,8 @@ class CategoryPanel(QWidget):
             self._selected = {
                 k
                 for k in preserve_selection
-                if k in categories and category_is_available(categories[k], self._excluded_dirs)
+                if k in categories
+                and category_is_available(categories[k], self._excluded_dirs, self._included_dirs)
             }
         else:
             self._prune_unavailable_selection()
@@ -120,34 +134,45 @@ class CategoryPanel(QWidget):
         categories: dict[str, Category],
         excluded: set[Path],
         *,
+        included: set[Path] | None = None,
         select_all: bool = False,
         preserve_selection: set[str] | None = None,
     ) -> None:
-        """Atomically replace categories + directory exclusions after a scan."""
+        """Atomically replace categories + directory filter after a scan."""
         self._categories = categories
         self._excluded_dirs = set(excluded)
+        self._included_dirs = set() if included is None else set(included)
         if select_all:
             self._selected = {
                 key
                 for key, category in categories.items()
-                if category_is_available(category, self._excluded_dirs)
+                if category_is_available(category, self._excluded_dirs, self._included_dirs)
             }
         elif preserve_selection is not None:
             self._selected = {
                 key
                 for key in preserve_selection
-                if key in categories and category_is_available(categories[key], self._excluded_dirs)
+                if key in categories
+                and category_is_available(
+                    categories[key], self._excluded_dirs, self._included_dirs
+                )
             }
         else:
             self._prune_unavailable_selection()
         self._rebuild_list()
 
-    def set_excluded_directories(self, excluded: set[Path]) -> None:
-        """Update labels/summary for Directories… exclusions; drop empty selections."""
+    def set_excluded_directories(
+        self,
+        excluded: set[Path],
+        included: set[Path] | None = None,
+    ) -> None:
+        """Update labels/summary for Directories… filter; drop empty selections."""
         new_excluded = set(excluded)
-        if new_excluded == self._excluded_dirs:
+        new_included = set() if included is None else set(included)
+        if new_excluded == self._excluded_dirs and new_included == self._included_dirs:
             return
         self._excluded_dirs = new_excluded
+        self._included_dirs = new_included
         pruned = self._prune_unavailable_selection()
         self._rebuild_list()
         if pruned:
@@ -193,6 +218,7 @@ class CategoryPanel(QWidget):
         self._categories = {}
         self._selected = set()
         self._excluded_dirs = set()
+        self._included_dirs = set()
         self._list.clear()
         self._summary.setText("No categories")
 
@@ -237,13 +263,13 @@ class CategoryPanel(QWidget):
         return pos.x() <= rect.left() + strip
 
     def _visible_refs(self, category: Category) -> list[FigureRef]:
-        return visible_category_refs(category, self._excluded_dirs)
+        return visible_category_refs(category, self._excluded_dirs, self._included_dirs)
 
     def _is_available(self, category: Category) -> bool:
-        return category_is_available(category, self._excluded_dirs)
+        return category_is_available(category, self._excluded_dirs, self._included_dirs)
 
     def _category_label(self, category: Category) -> str:
-        return category_list_label(category, self._excluded_dirs)
+        return category_list_label(category, self._excluded_dirs, self._included_dirs)
 
     def _prune_unavailable_selection(self) -> bool:
         before = set(self._selected)

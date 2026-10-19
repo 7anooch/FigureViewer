@@ -198,81 +198,211 @@ def _count_under(refs: list[FigureRef], prefix: Path) -> int:
     return sum(1 for ref in refs if _path_has_prefix(ref.relative_path, prefix.parts))
 
 
-def collect_exclusions(nodes: list[FilterNode], checked: dict[int, bool]) -> set[Path]:
-    excluded: set[Path] = set()
+def collect_directory_filter(
+    nodes: list[FilterNode], checked: dict[int, bool]
+) -> tuple[set[Path], set[Path]]:
+    """Return ``(excluded, included)`` from checkbox state.
 
-    def walk(node_list: list[FilterNode], parent_active: bool) -> None:
+    Unchecking a directory excludes it and its descendants. Checking a
+    descendant under an excluded ancestor re-includes that subtree (and its
+    children), which can itself be re-excluded deeper down.
+    """
+    excluded: set[Path] = set()
+    included: set[Path] = set()
+
+    def walk(node_list: list[FilterNode], parent_included: bool) -> None:
         for node in node_list:
             if node.fan_variants:
-                any_active = False
-                for variant in node.fan_variants:
-                    if parent_active and checked.get(id(variant), True):
-                        any_active = True
-                    elif parent_active:
-                        excluded.update(variant.exclusion_prefixes)
-                walk(node.children, any_active)
+                if parent_included:
+                    any_active = False
+                    for variant in node.fan_variants:
+                        # Default follow parent: missing means included here.
+                        if checked.get(id(variant), True):
+                            any_active = True
+                        else:
+                            excluded.update(variant.exclusion_prefixes)
+                    walk(node.children, any_active)
+                else:
+                    any_active = False
+                    for variant in node.fan_variants:
+                        # Under an exclusion, missing means still excluded.
+                        if checked.get(id(variant), False):
+                            any_active = True
+                            included.update(variant.exclusion_prefixes)
+                    walk(node.children, any_active)
                 continue
 
-            active = parent_active and checked.get(id(node), True)
-            if parent_active and not checked.get(id(node), True):
-                excluded.update(node.exclusion_prefixes)
-            walk(node.children, active)
+            # Missing checkbox follows parent (include under include, exclude under exclude).
+            node_checked = checked.get(id(node), parent_included)
+            if parent_included:
+                if node_checked:
+                    walk(node.children, True)
+                else:
+                    excluded.update(node.exclusion_prefixes)
+                    walk(node.children, False)
+            elif node_checked:
+                included.update(node.exclusion_prefixes)
+                walk(node.children, True)
+            else:
+                walk(node.children, False)
 
     walk(nodes, True)
-    return _prune_redundant_exclusions(excluded)
+    return _prune_filter_rules(excluded, included)
+
+
+def collect_exclusions(nodes: list[FilterNode], checked: dict[int, bool]) -> set[Path]:
+    excluded, _included = collect_directory_filter(nodes, checked)
+    return excluded
 
 
 def _prune_redundant_exclusions(excluded: set[Path]) -> set[Path]:
-    pruned = set(excluded)
-    for path in sorted(excluded, key=lambda item: len(item.parts)):
+    """Drop child exclusions whose parent is also excluded (no include exceptions)."""
+    return _prune_redundant_paths(excluded, opposing=set())
+
+
+def _prune_redundant_paths(paths: set[Path], *, opposing: set[Path]) -> set[Path]:
+    """Drop a path when an ancestor is in ``paths`` and no ``opposing`` path intervenes."""
+    pruned = set(paths)
+    for path in sorted(paths, key=lambda item: len(item.parts)):
         parts = path.parts
         for depth in range(1, len(parts)):
-            if Path(*parts[:depth]) in pruned:
-                pruned.discard(path)
-                break
+            ancestor = Path(*parts[:depth])
+            if ancestor not in pruned:
+                continue
+            if _has_intervening_path(ancestor, path, opposing):
+                continue
+            pruned.discard(path)
+            break
     return pruned
 
 
-def initial_checked_state(nodes: list[FilterNode], excluded: set[Path]) -> dict[int, bool]:
+def _has_intervening_path(ancestor: Path, descendant: Path, others: set[Path]) -> bool:
+    for other in others:
+        if other == ancestor or other == descendant:
+            continue
+        if _path_has_prefix(other, ancestor.parts) and _path_has_prefix(descendant, other.parts):
+            return True
+    return False
+
+
+def _prune_filter_rules(
+    excluded: set[Path], included: set[Path]
+) -> tuple[set[Path], set[Path]]:
+    # Inclusions only matter under an exclusion.
+    included = {
+        path
+        for path in included
+        if any(path != exc and _path_has_prefix(path, exc.parts) for exc in excluded)
+    }
+    excluded = _prune_redundant_paths(excluded, opposing=included)
+    included = {
+        path
+        for path in included
+        if any(path != exc and _path_has_prefix(path, exc.parts) for exc in excluded)
+    }
+    included = _prune_redundant_paths(included, opposing=excluded)
+    return excluded, included
+
+
+def initial_checked_state(
+    nodes: list[FilterNode],
+    excluded: set[Path],
+    included: set[Path] | None = None,
+) -> dict[int, bool]:
+    included = set() if included is None else set(included)
     checked: dict[int, bool] = {}
 
     def walk(node_list: list[FilterNode]) -> None:
         for node in node_list:
             for variant in node.fan_variants:
-                checked[id(variant)] = _prefixes_included(variant.exclusion_prefixes, excluded)
+                checked[id(variant)] = _prefixes_included(
+                    variant.exclusion_prefixes, excluded, included
+                )
             if node.exclusion_prefixes:
-                checked[id(node)] = _prefixes_included(node.exclusion_prefixes, excluded)
+                checked[id(node)] = _prefixes_included(
+                    node.exclusion_prefixes, excluded, included
+                )
             walk(node.children)
 
     walk(nodes)
     return checked
 
 
-def _prefixes_included(prefixes: frozenset[Path], excluded: set[Path]) -> bool:
-    for prefix in prefixes:
-        if prefix in excluded:
-            return False
-        for exc in excluded:
-            if _path_has_prefix(prefix, exc.parts):
-                return False
-    return True
+def _prefixes_included(
+    prefixes: frozenset[Path],
+    excluded: set[Path],
+    included: set[Path],
+) -> bool:
+    return all(_path_effectively_included(prefix, excluded, included) for prefix in prefixes)
+
+
+def _path_effectively_included(
+    path: Path,
+    excluded: set[Path],
+    included: set[Path],
+) -> bool:
+    """Whether directory ``path`` itself is included (checkbox checked)."""
+    best_depth = -1
+    is_included = True
+    for exc in excluded:
+        if path == exc or _path_has_prefix(path, exc.parts):
+            depth = len(exc.parts)
+            if depth > best_depth:
+                best_depth = depth
+                is_included = False
+    for inc in included:
+        if path == inc or _path_has_prefix(path, inc.parts):
+            depth = len(inc.parts)
+            if depth > best_depth:
+                best_depth = depth
+                is_included = True
+    return is_included
 
 
 def filter_by_directory_exclusions(
     playlist: list[FigureRef],
     excluded: set[Path],
+    included: set[Path] | None = None,
 ) -> list[FigureRef]:
     if not excluded:
         return list(playlist)
-    return [ref for ref in playlist if not is_under_excluded_directory(ref, excluded)]
+    included_set = set() if included is None else set(included)
+    return [
+        ref
+        for ref in playlist
+        if not is_under_excluded_directory(ref, excluded, included_set)
+    ]
 
 
-def is_under_excluded_directory(ref: FigureRef, excluded: set[Path]) -> bool:
+def is_under_excluded_directory(
+    ref: FigureRef,
+    excluded: set[Path],
+    included: set[Path] | None = None,
+) -> bool:
+    """True when the figure should be hidden by directory filter rules.
+
+    Most-specific matching path wins: an inclusion under an exclusion re-shows
+    that subtree; a deeper exclusion can hide part of a re-included tree.
+    """
+    if not excluded:
+        return False
+    included_set = set() if included is None else set(included)
     rel = ref.relative_path
+    best_depth = -1
+    hide = False
     for prefix in excluded:
         if _path_has_prefix(rel, prefix.parts):
-            return True
-    return False
+            depth = len(prefix.parts)
+            if depth > best_depth:
+                best_depth = depth
+                hide = True
+    for prefix in included_set:
+        if _path_has_prefix(rel, prefix.parts):
+            depth = len(prefix.parts)
+            if depth > best_depth:
+                best_depth = depth
+                hide = False
+    return hide
 
 
 def directory_prefixes_in_refs(refs: list[FigureRef]) -> set[Path]:
@@ -285,12 +415,24 @@ def prune_directory_exclusions(
     refs: list[FigureRef],
 ) -> set[Path]:
     """Drop exclusions that no longer exist in the current figure set."""
-    if not excluded:
-        return set()
+    excluded, _included = prune_directory_filter(excluded, set(), refs)
+    return excluded
+
+
+def prune_directory_filter(
+    excluded: set[Path],
+    included: set[Path],
+    refs: list[FigureRef],
+) -> tuple[set[Path], set[Path]]:
+    """Drop filter paths that no longer exist in the current figure set."""
+    if not excluded and not included:
+        return set(), set()
     valid = directory_prefixes_in_refs(refs)
     if not valid:
-        return set()
-    return {path for path in excluded if path in valid}
+        return set(), set()
+    pruned_excluded = {path for path in excluded if path in valid}
+    pruned_included = {path for path in included if path in valid}
+    return _prune_filter_rules(pruned_excluded, pruned_included)
 
 
 def maximal_exclusions(checked: dict[Path, bool]) -> set[Path]:
